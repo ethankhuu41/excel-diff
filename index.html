@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Spreadsheet Diff (Excel/CSV)</title>
+<!-- SheetJS (XLSX parser) -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.19.3/dist/xlsx.full.min.js"></script>
+<style>
+  :root{--bg:#f6f8fb;--card:#fff;--text:#111;--muted:#666;--brand:#2f80ed}
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; background:var(--bg); margin:0; padding:24px;}
+  .card{max-width:1100px; margin:0 auto; background:var(--card); border-radius:16px; padding:18px 18px 22px;
+        box-shadow:0 10px 30px rgba(0,0,0,.06)}
+  h1{margin:4px 0 8px}
+  .grid{display:grid; gap:12px}
+  .row2{grid-template-columns:1fr 1fr}
+  input[type=file], select, input[type=text]{padding:10px; border:1px solid #ddd; border-radius:10px; width:100%}
+  button{padding:10px 14px; border:0; border-radius:10px; background:var(--brand); color:#fff; font-weight:600; cursor:pointer}
+  .muted{color:var(--muted); font-size:12px}
+  table{border-collapse:collapse; width:100%; margin-top:14px}
+  th,td{border:1px solid #e6e6e6; padding:6px 8px; font-size:13px; vertical-align:top}
+  th{background:#f0f3f9}
+  .diff{background:#fff3c4}
+  .leftonly{background:#ffe2e2}
+  .rightonly{background:#e4ffe4}
+  .pill{display:inline-block; padding:2px 8px; border-radius:999px; background:#eef1f7; font-size:12px}
+  .actions{display:flex; gap:8px; margin:10px 0}
+  .btn{display:inline-block; padding:8px 12px; background:var(--brand); color:#fff; border-radius:10px; text-decoration:none}
+  .warn{color:#b00020; font-weight:600}
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Compare two spreadsheets</h1>
+    <div class="grid row2">
+      <div>
+        <label>File A (.xlsx/.xls/.csv)</label>
+        <input id="fileA" type="file" />
+      </div>
+      <div>
+        <label>File B (.xlsx/.xls/.csv)</label>
+        <input id="fileB" type="file" />
+      </div>
+    </div>
+
+    <div class="grid row2" style="margin-top:10px">
+      <div>
+        <label>Compare mode</label>
+        <select id="mode">
+          <option value="position">By row position (Row 1 vs Row 1, ...)</option>
+          <option value="key">By key column (match by an ID/name)</option>
+        </select>
+      </div>
+      <div>
+        <label>Key column (only if using key mode)</label>
+        <input id="keyname" type="text" placeholder="e.g. ID" />
+        <div class="muted">Must exist in both files, case-sensitive.</div>
+      </div>
+    </div>
+
+    <div class="grid row2" style="margin-top:10px">
+      <div>
+        <label>Header row?</label>
+        <select id="header">
+          <option value="yes">Yes (first row has column names)</option>
+          <option value="no">No (use C1, C2, ...)</option>
+        </select>
+      </div>
+      <div>
+        <label>Normalize text?</label>
+        <select id="normalize">
+          <option value="yes">Yes (trim & lowercase)</option>
+          <option value="no">No</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="go">Compare</button>
+      <a id="dl" class="btn" style="display:none">Download CSV</a>
+    </div>
+
+    <div id="summary" class="muted"></div>
+    <div id="warn" class="warn"></div>
+    <div id="table-wrap"></div>
+  </div>
+
+<script>
+  const $ = sel => document.querySelector(sel);
+
+  function readFile(file, headerYes) {
+    return new Promise((resolve, reject) => {
+      if (!file) return reject("Missing file");
+      const reader = new FileReader();
+      reader.onerror = () => reject("Failed to read file");
+      reader.onload = () => {
+        try {
+          // CSV: quick path
+          if ((file.name||"").toLowerCase().endsWith(".csv")) {
+            const text = reader.result;
+            // simple CSV parse using SheetJS for consistency
+            const wb = XLSX.read(text, {type:"string"});
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const json = XLSX.utils.sheet_to_json(ws, { header: headerYes?1:0, defval:"" });
+            return resolve(asDataFrame(json, headerYes));
+          }
+          // XLSX/XLS
+          const wb = XLSX.read(reader.result, {type:"array"});
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const json = XLSX.utils.sheet_to_json(ws, { header: headerYes?1:0, defval:"" });
+          resolve(asDataFrame(json, headerYes));
+        } catch (e) {
+          reject(e.message || e);
+        }
+      };
+      // choose correct read type
+      if ((file.name||"").toLowerCase().endsWith(".csv")) reader.readAsText(file);
+      else reader.readAsArrayBuffer(file);
+    });
+  }
+
+  function asDataFrame(json, headerYes) {
+    // json is array of objects (headerYes) or array of arrays (no header)
+    if (!json.length) return {columns:[], rows:[]};
+    if (headerYes) {
+      const cols = Array.from(new Set(json.flatMap(o => Object.keys(o))));
+      const rows = json.map(o => cols.map(c => (o[c] ?? "") + ""));
+      return {columns: cols, rows};
+    } else {
+      const maxLen = Math.max(...json.map(r => r.length||0));
+      const cols = Array.from({length:maxLen}, (_,i)=>`C${i+1}`);
+      const rows = json.map(r => cols.map((_,i)=> (r[i] ?? "") + ""));
+      return {columns: cols, rows};
+    }
+  }
+
+  function normalize(df, doNorm) {
+    if (!doNorm) return df;
+    const nrows = df.rows.map(r => r.map(v => (typeof v === "string" ? v.trim().toLowerCase() : v)));
+    return {columns: df.columns.slice(), rows: nrows};
+  }
+
+  function compareByPosition(A, B) {
+    const cols = [...new Set([...A.columns, ...B.columns])];
+    const maxR = Math.max(A.rows.length, B.rows.length);
+    const pad = (df) => df.rows.map(r => cols.map((_,i)=> (r[i] ?? "")));
+    const AR = pad(A), BR = pad(B);
+    const rows = [];
+    for (let i=0;i<maxR;i++){
+      const a = AR[i] || cols.map(()=> "");
+      const b = BR[i] || cols.map(()=> "");
+      let status = "same";
+      const marks = a.map((v,idx)=> {
+        const d = (v+"") !== (b[idx]+"");
+        if (d) status = "diff";
+        return d ? "diff" : "";
+      });
+      if (!AR[i] && BR[i]) status = "rightonly";
+      if (AR[i] && !BR[i]) status = "leftonly";
+      rows.push({key:(i+1), status, display: (status==="leftonly"?a:b), marks});
+    }
+    return {columns: cols, rows};
+  }
+
+  function indexByKey(df, key) {
+    const idx = {};
+    const keyPos = df.columns.indexOf(key);
+    if (keyPos === -1) throw new Error(`Key column '${key}' not found`);
+    df.rows.forEach(r => { idx[(r[keyPos] ?? "")+""] = r; });
+    return {idx, cols: df.columns, keyPos};
+  }
+
+  function compareByKey(A, B, key) {
+    const a = indexByKey(A, key), b = indexByKey(B, key);
+    const cols = Array.from(new Set([...A.columns, ...B.columns]));
+    const allKeys = Array.from(new Set([...Object.keys(a.idx), ...Object.keys(b.idx)])).sort();
+    const rows = [];
+    for (const k of allKeys) {
+      const ra = a.idx[k], rb = b.idx[k];
+      let status, disp, marks;
+      if (ra && rb) {
+        status = "same"; marks = [];
+        const aAligned = cols.map(c => ra[A.columns.indexOf(c)] ?? "");
+        const bAligned = cols.map(c => rb[B.columns.indexOf(c)] ?? "");
+        marks = cols.map((_,i)=> (aAligned[i]+"") !== (bAligned[i]+"") ? (status="diff","diff") : "");
+        disp = status==="leftonly" ? aAligned : bAligned; // not used here, but keep consistent
+        rows.push({key:k, status, display:bAligned, marks});
+      } else if (ra && !rb) {
+        status = "leftonly";
+        const aAligned = cols.map(c => ra[A.columns.indexOf(c)] ?? "");
+        rows.push({key:k, status, display:aAligned, marks:cols.map(()=> "")});
+      } else {
+        status = "rightonly";
+        const bAligned = cols.map(c => rb[B.columns.indexOf(c)] ?? "");
+        rows.push({key:k, status, display:bAligned, marks:cols.map(()=> "")});
+      }
+    }
+    return {columns: cols, rows};
+  }
+
+  function renderTable(columns, rows) {
+    const head = "<tr><th>Key/Row</th><th>Status</th>"+columns.map(c=>`<th>${escapeHtml(c)}</th>`).join("")+"</tr>";
+    const body = rows.map(r=>{
+      const tds = r.display.map((v,i)=>`<td class="${r.marks[i]==="diff"?"diff":""}">${escapeHtml(v)}</td>`).join("");
+      return `<tr class="${r.status}"><td>${escapeHtml(r.key)}</td><td><span class="pill">${r.status}</span></td>${tds}</tr>`;
+    }).join("");
+    return `<table>${head}${body}</table>`;
+  }
+
+  function toCSV(columns, rows) {
+    let out = "Key/Row,Status," + columns.map(csvEscape).join(",") + "\n";
+    rows.forEach(r=>{
+      const line = [r.key, r.status, ...r.display.map(x=>csvEscape(x))].join(",");
+      out += line + "\n";
+    });
+    return out;
+  }
+
+  // helpers
+  function csvEscape(v){ v = (v==null?"":String(v)); if (v.includes(",")||v.includes('"')||v.includes("\n")) return `"${v.replace(/"/g,'""')}"`; return v; }
+  function escapeHtml(s){ s=(s==null?"":String(s)); return s.replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m])); }
+
+  $("#go").addEventListener("click", async ()=>{
+    $("#warn").textContent = ""; $("#summary").textContent = ""; $("#table-wrap").innerHTML = ""; $("#dl").style.display="none";
+    const fA = $("#fileA").files[0], fB = $("#fileB").files[0];
+    const headerYes = $("#header").value === "yes";
+    const norm = $("#normalize").value === "yes";
+    const mode = $("#mode").value, keyname = $("#keyname").value.trim();
+
+    if (!fA || !fB) { $("#warn").textContent = "Please choose both files."; return; }
+    if (mode==="key" && !keyname) { $("#warn").textContent = "Enter a key column name for key mode."; return; }
+
+    try {
+      const [Araw, Braw] = await Promise.all([readFile(fA, headerYes), readFile(fB, headerYes)]);
+      const A = normalize(Araw, norm), B = normalize(Braw, norm);
+
+      let diff;
+      if (mode==="key") diff = compareByKey(A,B,keyname);
+      else diff = compareByPosition(A,B);
+
+      const tableHTML = renderTable(diff.columns, diff.rows);
+      $("#table-wrap").innerHTML = tableHTML;
+      $("#summary").textContent = `Rows compared: ${diff.rows.length} • Columns: ${diff.columns.length} • Mode: ${mode}${mode==="key"?" ("+keyname+")":""}`;
+
+      // CSV download
+      const csv = toCSV(diff.columns, diff.rows);
+      const href = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);
+      const dl = $("#dl"); dl.href = href; dl.download = "diff.csv"; dl.style.display = "inline-block";
+    } catch (e) {
+      $("#warn").textContent = "Error: " + (e.message || e);
+    }
+  });
+</script>
+</body>
+</html>
