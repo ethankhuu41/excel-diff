@@ -4,8 +4,10 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Spreadsheet Diff (Excel/CSV)</title>
-<!-- SheetJS (XLSX parser) -->
+
+<!-- ✅ Fix: load SheetJS Excel parser BEFORE your script -->
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.19.3/dist/xlsx.full.min.js"></script>
+
 <style>
   :root{--bg:#f6f8fb;--card:#fff;--text:#111;--muted:#666;--brand:#2f80ed}
   body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; background:var(--bg); margin:0; padding:24px;}
@@ -29,6 +31,7 @@
   .warn{color:#b00020; font-weight:600}
 </style>
 </head>
+
 <body>
   <div class="card">
     <h1>Compare two spreadsheets</h1>
@@ -95,32 +98,25 @@
       reader.onerror = () => reject("Failed to read file");
       reader.onload = () => {
         try {
-          // CSV: quick path
-          if ((file.name||"").toLowerCase().endsWith(".csv")) {
-            const text = reader.result;
-            // simple CSV parse using SheetJS for consistency
-            const wb = XLSX.read(text, {type:"string"});
+          const lower = (file.name||"").toLowerCase();
+          if (lower.endsWith(".csv")) {
+            const wb = XLSX.read(reader.result, {type:"string"});
             const ws = wb.Sheets[wb.SheetNames[0]];
             const json = XLSX.utils.sheet_to_json(ws, { header: headerYes?1:0, defval:"" });
             return resolve(asDataFrame(json, headerYes));
           }
-          // XLSX/XLS
           const wb = XLSX.read(reader.result, {type:"array"});
           const ws = wb.Sheets[wb.SheetNames[0]];
           const json = XLSX.utils.sheet_to_json(ws, { header: headerYes?1:0, defval:"" });
           resolve(asDataFrame(json, headerYes));
-        } catch (e) {
-          reject(e.message || e);
-        }
+        } catch (e) { reject(e.message || e); }
       };
-      // choose correct read type
-      if ((file.name||"").toLowerCase().endsWith(".csv")) reader.readAsText(file);
+      if (file.name.toLowerCase().endsWith(".csv")) reader.readAsText(file);
       else reader.readAsArrayBuffer(file);
     });
   }
 
   function asDataFrame(json, headerYes) {
-    // json is array of objects (headerYes) or array of arrays (no header)
     if (!json.length) return {columns:[], rows:[]};
     if (headerYes) {
       const cols = Array.from(new Set(json.flatMap(o => Object.keys(o))));
@@ -177,13 +173,12 @@
     const rows = [];
     for (const k of allKeys) {
       const ra = a.idx[k], rb = b.idx[k];
-      let status, disp, marks;
+      let status, marks;
       if (ra && rb) {
-        status = "same"; marks = [];
+        status = "same";
         const aAligned = cols.map(c => ra[A.columns.indexOf(c)] ?? "");
         const bAligned = cols.map(c => rb[B.columns.indexOf(c)] ?? "");
         marks = cols.map((_,i)=> (aAligned[i]+"") !== (bAligned[i]+"") ? (status="diff","diff") : "");
-        disp = status==="leftonly" ? aAligned : bAligned; // not used here, but keep consistent
         rows.push({key:k, status, display:bAligned, marks});
       } else if (ra && !rb) {
         status = "leftonly";
@@ -216,7 +211,6 @@
     return out;
   }
 
-  // helpers
   function csvEscape(v){ v = (v==null?"":String(v)); if (v.includes(",")||v.includes('"')||v.includes("\n")) return `"${v.replace(/"/g,'""')}"`; return v; }
   function escapeHtml(s){ s=(s==null?"":String(s)); return s.replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m])); }
 
@@ -242,7 +236,6 @@
       $("#table-wrap").innerHTML = tableHTML;
       $("#summary").textContent = `Rows compared: ${diff.rows.length} • Columns: ${diff.columns.length} • Mode: ${mode}${mode==="key"?" ("+keyname+")":""}`;
 
-      // CSV download
       const csv = toCSV(diff.columns, diff.rows);
       const href = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);
       const dl = $("#dl"); dl.href = href; dl.download = "diff.csv"; dl.style.display = "inline-block";
