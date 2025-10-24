@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Excel/CSV Compare & Merge (Client-Side)</title>
+<meta name="description" content="Upload two Excel/CSV files, compare cell-by-cell, choose A or B per difference, and export a merged file." />
+<link rel="icon" href="data:,">
+<!-- SheetJS for parsing/writing Excel/CSV in-browser -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  :root { --fg:#111; --muted:#666; --bg:#fafafa; --acc:#2563eb; --hl:#eef2ff; --ok:#16a34a; --warn:#d97706; --bad:#dc2626; }
+  *{box-sizing:border-box}
+  body{font-family:system-ui,-apple-system,Segoe UI,Inter,Roboto,Arial,sans-serif;background:var(--bg);color:var(--fg);margin:0}
+  .wrap{max-width:1100px;margin:32px auto;padding:0 16px}
+  .card{background:#fff;border-radius:16px;box-shadow:0 8px 30px rgba(0,0,0,.06);padding:18px;margin-bottom:16px}
+  h1{margin:0 0 8px 0}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  label{font-weight:600;display:block;margin-bottom:6px}
+  input[type="file"], input[type="text"], select{width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:10px;background:#fff}
+  .actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}
+  button{appearance:none;border:0;border-radius:12px;padding:12px 16px;background:var(--acc);color:#fff;font-weight:700;cursor:pointer}
+  button.secondary{background:#334155}
+  button.warn{background:#d97706}
+  .muted{color:var(--muted);font-size:14px}
+  .stats{display:flex;gap:10px;flex-wrap:wrap}
+  .pill{padding:6px 10px;border-radius:999px;font-weight:700}
+  .ok{background:#ecfdf5;color:#065f46}
+  .warnpill{background:#fffbeb;color:#92400e}
+  .bad{background:#fef2f2;color:#991b1b}
+  .tbl{overflow:auto;border:1px solid #e5e7eb;border-radius:10px}
+  table{border-collapse:separate;border-spacing:0;width:100%;min-width:860px}
+  th,td{padding:8px 10px;border-bottom:1px solid #eee;vertical-align:top}
+  thead th{position:sticky;top:0;background:#fff}
+  td.key{font-weight:700;background:#f8fafc}
+  td.diff{background:var(--hl)}
+  td.diff .before{font-size:12px;color:#991b1b;margin-bottom:4px}
+  td.diff .after{font-size:12px;color:#065f46}
+  .hidden{display:none}
+  .footer{font-size:12px;color:var(--muted);text-align:center}
+  .choiceCell{white-space:nowrap}
+  .sticky-controls{position:sticky;top:0;background:#fff;z-index:1;padding-bottom:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>Compare & Merge Excel/CSV</h1>
+    <p class="muted">All processing happens in your browser. Nothing is uploaded to any server.</p>
+
+    <div class="row">
+      <div>
+        <label for="fileA">Main file (A)</label>
+        <input id="fileA" type="file" accept=".xlsx,.xls,.csv" />
+      </div>
+      <div>
+        <label for="fileB">Other file (B)</label>
+        <input id="fileB" type="file" accept=".xlsx,.xls,.csv" />
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:10px">
+      <div>
+        <label for="keySelect">Key column</label>
+        <select id="keySelect" aria-describedby="keyHelp">
+          <option value="">(auto from A’s first header)</option>
+        </select>
+        <div id="keyHelp" class="muted">Key uniquely identifies rows (e.g., id, email, SKU).</div>
+      </div>
+      <div>
+        <label for="sheetName">Worksheet (optional, for .xlsx)</label>
+        <input id="sheetName" type="text" placeholder="e.g. Sheet1" />
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="compareBtn" type="button">Compare</button>
+      <button id="downloadMergedXLSX" type="button" class="secondary hidden">Download Merged XLSX</button>
+      <button id="downloadMergedCSV" type="button" class="secondary hidden">Download Merged CSV</button>
+      <button id="downloadDiffCSV" type="button" class="warn hidden">Download Diff CSV</button>
+    </div>
+    <div id="msg" class="muted" style="margin-top:8px" role="status" aria-live="polite"></div>
+  </div>
+
+  <div id="summary" class="card hidden" aria-live="polite">
+    <div class="stats">
+      <span id="addedCount" class="pill ok">Added: 0</span>
+      <span id="removedCount" class="pill bad">Removed: 0</span>
+      <span id="modifiedCount" class="pill warnpill">Modified: 0</span>
+    </div>
+  </div>
+
+  <div id="tabs" class="hidden">
+    <div class="card">
+      <div class="sticky-controls">
+        <h3 style="margin:0 0 8px 0">Added (exist in B, not in A)</h3>
+        <div class="muted">Tick rows to <b>add</b> into the merge.</div>
+      </div>
+      <div class="tbl"><table id="tblAdded"></table></div>
+    </div>
+
+    <div class="card">
+      <div class="sticky-controls">
+        <h3 style="margin:0 0 8px 0">Removed (exist in A, not in B)</h3>
+        <div class="muted">Tick rows to <b>keep from A</b> in the merge; untick to remove.</div>
+      </div>
+      <div class="tbl"><table id="tblRemoved"></table></div>
+    </div>
+
+    <div class="card">
+      <div class="sticky-controls">
+        <h3 style="margin:0 0 8px 0">Modified (in both, but some cells differ)</h3>
+        <div class="muted">Choose per cell: keep A or B. Quick: “Accept all B in row”.</div>
+      </div>
+      <div class="tbl"><table id="tblModified"></table></div>
+    </div>
+  </div>
+
+  <div class="footer">Tip: large files work best if saved as CSV first. Choose a unique key.</div>
+</div>
+
+<script>
+/* ===== Utilities (compat-safe; no replaceAll) ===== */
+function escHtml(s){ s=(s==null?"":String(s)); return s.split("&").join("&amp;").split("<").join("&lt;").split(">").join("&gt;").split('"').join("&quot;"); }
+function trim(v){ return (v==null?"":String(v)).trim(); }
+const $ = (sel)=>document.querySelector(sel);
+function setMsg(t){ $("#msg").textContent = t; }
+function logErr(e){ console.error(e); setMsg((e && e.message) ? e.message : String(e)); }
+
+/* ===== XLSX parsing/writing ===== */
+function ensureXLSX(){ if(typeof XLSX==="undefined") throw new Error("Failed to load Excel parser library."); }
+async function readFileToWorkbook(file){ if(!file) throw new Error("Please select both files."); ensureXLSX(); const buf=await file.arrayBuffer(); return XLSX.read(buf,{type:"array"}); }
+function sheetToRows(workbook, sheetName){
+  const sName = (sheetName && workbook.Sheets[sheetName]) ? sheetName : workbook.SheetNames[0];
+  if(!sName) throw new Error("No worksheet found in the file.");
+  const ws = workbook.Sheets[sName];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+  if(!rows.length) return { headers: [], rows: [] };
+  const headers = rows[0].map(h=>trim(h));
+  const data = rows.slice(1).map(r=>{
+    const o={}; for(let i=0;i<headers.length;i++) o[headers[i]] = trim(r[i]||""); return o;
+  }).filter(o => Object.values(o).some(v=>v!==""));
+  return { headers, rows: data };
+}
+function writeXLSX(filename, headers, rows){
+  const aoa = [headers];
+  rows.forEach(r=> aoa.push(headers.map(h=> r[h] != null ? r[h] : "" )));
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Merged");
+  XLSX.writeFile(wb, filename);
+}
+
+/* ===== Diff helpers ===== */
+function unionHeaders(a,b){ const set=new Set(a); b.forEach(h=>set.add(h)); return Array.from(set); }
+function normalizeRow(row, headers){ const o={}; headers.forEach(h=>o[h]=trim(row[h]||"")); return o; }
+function indexByKey(rows, key){ const m=new Map(); rows.forEach(r=>{ const k=r[key]; if(k!=null) m.set(String(k), r); }); return m; }
+
+/* ===== Rendering ===== */
+function buildAddedTable(tableEl, headers, rows, key){
+  const head = "<thead><tr><th>Select</th>"+headers.map(h=>"<th>"+escHtml(h)+"</th>").join("")+"</tr></thead>";
+  let body="";
+  if(!rows.length){ body = `<tbody><tr><td colspan="${headers.length+1}" class="muted">None</td></tr></tbody>`; }
+  else{
+    body = "<tbody>"+rows.map(r=>{
+      const k = escHtml(r[key]||"");
+      const tds = headers.map(h=>`<td>${escHtml(r[h]||"")}</td>`).join("");
+      return `<tr data-key="${k}"><td class="choiceCell"><input type="checkbox" class="addRow"></td>${tds}</tr>`;
+    }).join("")+"</tbody>";
+  }
+  tableEl.innerHTML = head + body;
+}
+
+function buildRemovedTable(tableEl, headers, rows, key){
+  const head = "<thead><tr><th>Keep A?</th>"+headers.map(h=>"<th>"+escHtml(h)+"</th>").join("")+"</tr></thead>";
+  let body="";
+  if(!rows.length){ body = `<tbody><tr><td colspan="${headers.length+1}" class="muted">None</td></tr></tbody>`; }
+  else{
+    body = "<tbody>"+rows.map(r=>{
+      const k = escHtml(r[key]||"");
+      const tds = headers.map(h=>`<td>${escHtml(r[h]||"")}</td>`).join("");
+      // default: checked (keep from A)
+      return `<tr data-key="${k}"><td class="choiceCell"><input type="checkbox" class="keepA" checked></td>${tds}</tr>`;
+    }).join("")+"</tbody>";
+  }
+  tableEl.innerHTML = head + body;
+}
+
+function buildModifiedTable(tableEl, headers, mods, key){
+  const head = "<thead><tr><th>Key</th><th>Quick</th>"+headers.filter(h=>h!==key).map(h=>"<th>"+escHtml(h)+"</th>").join("")+"</tr></thead>";
+  let body="";
+  if(!mods.length){ body = `<tbody><tr><td colspan="${headers.length+2}" class="muted">None</td></tr></tbody>`; }
+  else{
+    body = "<tbody>"+mods.map(m=>{
+      const keyCell = `<td class="key">${escHtml(m.key)}</td>`;
+      const quick = `<td class="choiceCell"><button type="button" class="acceptRowB" data-key="${escHtml(m.key)}">Accept all B (row)</button></td>`;
+      const cells = headers.filter(h=>h!==key).map(h=>{
+        const a = m.before[h]||"", b = m.after[h]||"";
+        if(a===b){
+          return `<td>${escHtml(b)}</td>`;
+        }else{
+          const name = `${escHtml(m.key)}__${escHtml(h)}`;
+          return `<td class="diff">
+            <div class="before"><label><input type="radio" name="${name}" value="A" checked> A: ${escHtml(a)}</label></div>
+            <div class="after"><label><input type="radio" name="${name}" value="B"> B: ${escHtml(b)}</label></div>
+          </td>`;
+        }
+      }).join("");
+      return `<tr data-key="${escHtml(m.key)}">${keyCell}${quick}${cells}</tr>`;
+    }).join("")+"</tbody>";
+  }
+  tableEl.innerHTML = head + body;
+
+  // Wire row "Accept all B" buttons
+  tableEl.querySelectorAll(".acceptRowB").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const keyVal = btn.getAttribute("data-key");
+      const row = tableEl.querySelector(`tr[data-key="${CSS.escape(keyVal)}"]`);
+      if(!row) return;
+      row.querySelectorAll('input[type="radio"][value="B"]').forEach(r=>{ r.checked = true; });
+    });
+  });
+}
+
+/* ===== CSV helpers ===== */
+function toCSV(headers, rows){
+  const esc = (v)=>{ const s=(v==null?"":String(v)); return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
+  const lines = [];
+  lines.push(headers.map(esc).join(","));
+  rows.forEach(r=> lines.push(headers.map(h=> esc(r[h]||"")).join(",")) );
+  return lines.join("\n");
+}
+function diffCSV(headers, key, added, removed, modified){
+  const other = headers.filter(h=>h!==key);
+  const head = ["ChangeType", key].concat(other, [].concat.apply([], other.map(h=>[h+"_old", h+"_new"])));
+  const esc = (v)=>{ const s=(v==null?"":String(v)); return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
+  const lines = []; lines.push(head.map(esc).join(","));
+  function write(typ, r, oldNew, before, after){
+    const base = [typ, r[key]||""].concat(other.map(h=>r[h]||""));
+    const tail = oldNew ? [].concat.apply([], other.map(h=>[(before[h]||""),(after[h]||"")])) : [].concat.apply([], other.map(()=>["",""]));
+    lines.push(base.concat(tail).map(esc).join(","));
+  }
+  added.forEach(r=>write("Added", r, false));
+  removed.forEach(r=>write("Removed", r, false));
+  modified.forEach(m=>write("Modified", m.after, true, m.before, m.after));
+  return lines.join("\n");
+}
+function downloadFile(name, mime, textOrBlob){
+  const blob = textOrBlob instanceof Blob ? textOrBlob : new Blob([textOrBlob], {type:mime});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; a.click(); URL.revokeObjectURL(a.href);
+}
+
+/* ===== App state ===== */
+let HEADERS=[], KEY="";
+let Arows=[], Brows=[];
+let mapA, mapB;
+let ADDED=[], REMOVED=[], MODS=[];
+let mergedRows=[]; // built on demand
+
+/* ===== Build merged based on user choices ===== */
+function buildMerged(){
+  // baseline = A
+  const resultMap = new Map(mapA); // shallow copy (objects reused; we overwrite where needed)
+  // Removed: keepA checkbox (default checked). If unchecked -> delete.
+  document.querySelectorAll("#tblRemoved .keepA").forEach(chk=>{
+    const tr = chk.closest("tr"); const k = tr.getAttribute("data-key");
+    if(!chk.checked){ resultMap.delete(k); }
+  });
+  // Added: addRow checkbox (if checked -> insert row from B)
+  document.querySelectorAll("#tblAdded .addRow").forEach(chk=>{
+    const tr = chk.closest("tr"); const k = tr.getAttribute("data-key");
+    if(chk.checked){ resultMap.set(k, mapB.get(k)); }
+  });
+  // Modified: per-cell radios (A vs B). Start from existing (A or B depending above); overwrite chosen "B".
+  // For modified keys, we ensure base is A then apply cell choices.
+  MODS.forEach(m=>{
+    const k = m.key;
+    const base = (resultMap.get(k) ? {...resultMap.get(k)} : {...m.before});
+    // For each differing column, if radio selected B => take m.after[col]
+    const diffCols = Object.keys(m.before).concat(Object.keys(m.after));
+    const uniq = Array.from(new Set(diffCols));
+    uniq.forEach(col=>{
+      if(col===KEY) return;
+      const name = `${k}__${col}`;
+      const radios = document.getElementsByName(name);
+      let chooseB=false;
+      for(let i=0;i<radios.length;i++){ if(radios[i].checked && radios[i].value==="B"){ chooseB=true; break; } }
+      if(chooseB){ base[col] = m.after[col] || ""; } else { base[col] = m.before[col] || ""; }
+    });
+    resultMap.set(k, base);
+  });
+
+  // To array in consistent header order
+  const out = [];
+  resultMap.forEach(v=> out.push(v));
+  // Keep stable ordering by KEY if present
+  out.sort((x,y)=> String(x[KEY]||"").localeCompare(String(y[KEY]||"")));
+  mergedRows = out;
+}
+
+/* ===== Main wiring ===== */
+window.addEventListener("DOMContentLoaded", ()=>{
+  const compareBtn = $("#compareBtn");
+  const btnMergedX = $("#downloadMergedXLSX");
+  const btnMergedC = $("#downloadMergedCSV");
+  const btnDiffCSV = $("#downloadDiffCSV");
+
+  $("#fileA").addEventListener("change", ()=>{
+    $("#keySelect").innerHTML = `<option value="">(auto from A’s first header)</option>`;
+    $("#keySelect").dataset.populated = "";
+  });
+
+  compareBtn.addEventListener("click", async ()=>{
+    try{
+      setMsg(""); $("#summary").classList.add("hidden"); $("#tabs").classList.add("hidden");
+      btnMergedX.classList.add("hidden"); btnMergedC.classList.add("hidden"); btnDiffCSV.classList.add("hidden");
+
+      const fA = $("#fileA").files[0], fB = $("#fileB").files[0];
+      if(!fA || !fB) throw new Error("Please select both files.");
+
+      const [wbA, wbB] = await Promise.all([readFileToWorkbook(fA), readFileToWorkbook(fB)]);
+      const sheet = trim($("#sheetName").value) || undefined;
+      const A = sheetToRows(wbA, sheet), B = sheetToRows(wbB, sheet);
+      if(!A.headers.length) throw new Error("Main (A) has no headers.");
+      if(!B.headers.length) throw new Error("Other (B) has no headers.");
+
+      // headers & key
+      HEADERS = unionHeaders(A.headers, B.headers);
+      const keySel = $("#keySelect");
+      if(keySel.dataset.populated !== "1"){
+        keySel.innerHTML = `<option value="">(auto from A’s first header: ${escHtml(A.headers[0])})</option>`
+          + A.headers.map(h=>`<option value="${escHtml(h)}">${escHtml(h)}</option>`).join("");
+        keySel.dataset.populated = "1";
+      }
+      KEY = trim(keySel.value) || A.headers[0];
+      if(HEADERS.indexOf(KEY)===-1) throw new Error('Key "'+KEY+'" not found.');
+
+      // normalize + index
+      Arows = A.rows.map(r=>normalizeRow(r, HEADERS));
+      Brows = B.rows.map(r=>normalizeRow(r, HEADERS));
+      mapA = indexByKey(Arows, KEY); mapB = indexByKey(Brows, KEY);
+
+      const keysA = Array.from(mapA.keys()), keysB = Array.from(mapB.keys());
+      const setA = new Set(keysA), setB = new Set(keysB);
+
+      ADDED = []; REMOVED = []; MODS = [];
+
+      // Added & Modified
+      keysB.forEach(k=>{
+        if(!setA.has(k)){ ADDED.push(mapB.get(k)); }
+        else{
+          const a = mapA.get(k), b = mapB.get(k);
+          const changedCols = [];
+          HEADERS.forEach(h=>{ if(h!==KEY && (a[h]||"") !== (b[h]||"")) changedCols.push(h); });
+          if(changedCols.length){
+            const before = {}; const after = {};
+            HEADERS.forEach(h=>{ before[h] = a[h]||""; after[h] = b[h]||""; });
+            MODS.push({ key:k, before, after, changedCols });
+          }
+        }
+      });
+      // Removed
+      keysA.forEach(k=>{ if(!setB.has(k)) REMOVED.push(mapA.get(k)); });
+
+      // Sort
+      const cmpKey = (x,y)=> String(x[KEY]||"").localeCompare(String(y[KEY]||""));
+      ADDED.sort(cmpKey); REMOVED.sort(cmpKey);
+      MODS.sort((x,y)=> String(x.key).localeCompare(String(y.key)));
+
+      // Summary
+      $("#addedCount").textContent = "Added: "+ADDED.length;
+      $("#removedCount").textContent = "Removed: "+REMOVED.length;
+      $("#modifiedCount").textContent = "Modified: "+MODS.length;
+      $("#summary").classList.remove("hidden");
+
+      // Build tables
+      buildAddedTable($("#tblAdded"), HEADERS, ADDED, KEY);
+      buildRemovedTable($("#tblRemoved"), HEADERS, REMOVED, KEY);
+      // Convert MODS to rendering-friendly shape: changed set
+      const modsForUI = MODS.map(m=>({ key:m.key, before:m.before, after:m.after }));
+      // In build, we decide per-cell by comparing values (same logic)
+      buildModifiedTable($("#tblModified"), HEADERS, modsForUI, KEY);
+      $("#tabs").classList.remove("hidden");
+
+      // Enable downloads
+      btnMergedX.classList.remove("hidden");
+      btnMergedC.classList.remove("hidden");
+      btnDiffCSV.classList.remove("hidden");
+
+      setMsg("Compared: "+(fA.name||"A")+" vs "+(fB.name||"B")+". Choose your changes, then download the merged file.");
+    }catch(e){ logErr(e); }
+  });
+
+  btnMergedX.addEventListener("click", ()=>{
+    buildMerged();
+    writeXLSX("merged.xlsx", HEADERS, mergedRows);
+  });
+
+  btnMergedC.addEventListener("click", ()=>{
+    buildMerged();
+    const csv = toCSV(HEADERS, mergedRows);
+    downloadFile("merged.csv", "text/csv;charset=utf-8;", csv);
+  });
+
+  btnDiffCSV.addEventListener("click", ()=>{
+    const diff = diffCSV(HEADERS, KEY, ADDED, REMOVED, MODS.map(m=>({before:m.before, after:m.after})));
+    downloadFile("diff_audit.csv", "text/csv;charset=utf-8;", diff);
+  });
+});
+</script>
+</body>
+</html>
