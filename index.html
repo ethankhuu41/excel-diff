@@ -1,411 +1,625 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Excel/CSV Compare & Merge (Client-Side)</title>
-<meta name="description" content="Upload two Excel/CSV files, compare cell-by-cell, choose A or B per difference, and export a merged file." />
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Excel/CSV Compare & Merge — 3-Pane UI + Shortcuts</title>
 <link rel="icon" href="data:,">
-<!-- SheetJS for parsing/writing Excel/CSV in-browser -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
-  :root { --fg:#111; --muted:#666; --bg:#fafafa; --acc:#2563eb; --hl:#eef2ff; --ok:#16a34a; --warn:#d97706; --bad:#dc2626; }
-  *{box-sizing:border-box}
-  body{font-family:system-ui,-apple-system,Segoe UI,Inter,Roboto,Arial,sans-serif;background:var(--bg);color:var(--fg);margin:0}
-  .wrap{max-width:1100px;margin:32px auto;padding:0 16px}
-  .card{background:#fff;border-radius:16px;box-shadow:0 8px 30px rgba(0,0,0,.06);padding:18px;margin-bottom:16px}
-  h1{margin:0 0 8px 0}
-  .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-  label{font-weight:600;display:block;margin-bottom:6px}
-  input[type="file"], input[type="text"], select{width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:10px;background:#fff}
-  .actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}
-  button{appearance:none;border:0;border-radius:12px;padding:12px 16px;background:var(--acc);color:#fff;font-weight:700;cursor:pointer}
-  button.secondary{background:#334155}
-  button.warn{background:#d97706}
-  .muted{color:var(--muted);font-size:14px}
-  .stats{display:flex;gap:10px;flex-wrap:wrap}
-  .pill{padding:6px 10px;border-radius:999px;font-weight:700}
-  .ok{background:#ecfdf5;color:#065f46}
-  .warnpill{background:#fffbeb;color:#92400e}
-  .bad{background:#fef2f2;color:#991b1b}
-  .tbl{overflow:auto;border:1px solid #e5e7eb;border-radius:10px}
-  table{border-collapse:separate;border-spacing:0;width:100%;min-width:860px}
-  th,td{padding:8px 10px;border-bottom:1px solid #eee;vertical-align:top}
-  thead th{position:sticky;top:0;background:#fff}
-  td.key{font-weight:700;background:#f8fafc}
-  td.diff{background:var(--hl)}
-  td.diff .before{font-size:12px;color:#991b1b;margin-bottom:4px}
-  td.diff .after{font-size:12px;color:#065f46}
-  .hidden{display:none}
-  .footer{font-size:12px;color:var(--muted);text-align:center}
-  .choiceCell{white-space:nowrap}
-  .sticky-controls{position:sticky;top:0;background:#fff;z-index:1;padding-bottom:6px}
+  :root { --hl:#fff3c4 }
+  .cell-mod { background: var(--hl) }
+  .cell-missing { background-image: repeating-linear-gradient(45deg,#f3f4f6,#f3f4f6 6px,#e5e7eb 6px,#e5e7eb 12px) }
+  .badge { font-size:10px; line-height:1; padding:2px 4px; border-radius:4px; color:#fff; background:#111; }
+  .sticky-top { position: sticky; top: 0; z-index: 20; background: white; }
+  .sticky-bottom { position: sticky; bottom: 0; z-index: 20; background: white; }
+  .row-hover:hover { background:#fafafa }
+  .scrollbar-thin::-webkit-scrollbar { height: 8px; width: 8px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background:#d1d5db; border-radius:6px; }
 </style>
 </head>
-<body>
-<div class="wrap">
-  <div class="card">
-    <h1>Compare & Merge Excel/CSV</h1>
-    <p class="muted">All processing happens in your browser. Nothing is uploaded to any server.</p>
-
-    <div class="row">
-      <div>
-        <label for="fileA">Main file (A)</label>
-        <input id="fileA" type="file" accept=".xlsx,.xls,.csv" />
-      </div>
-      <div>
-        <label for="fileB">Other file (B)</label>
-        <input id="fileB" type="file" accept=".xlsx,.xls,.csv" />
-      </div>
-    </div>
-
-    <div class="row" style="margin-top:10px">
-      <div>
-        <label for="keySelect">Key column</label>
-        <select id="keySelect" aria-describedby="keyHelp">
-          <option value="">(auto from A’s first header)</option>
-        </select>
-        <div id="keyHelp" class="muted">Key uniquely identifies rows (e.g., id, email, SKU).</div>
-      </div>
-      <div>
-        <label for="sheetName">Worksheet (optional, for .xlsx)</label>
-        <input id="sheetName" type="text" placeholder="e.g. Sheet1" />
-      </div>
-    </div>
-
-    <div class="actions">
-      <button id="compareBtn" type="button">Compare</button>
-      <button id="downloadMergedXLSX" type="button" class="secondary hidden">Download Merged XLSX</button>
-      <button id="downloadMergedCSV" type="button" class="secondary hidden">Download Merged CSV</button>
-      <button id="downloadDiffCSV" type="button" class="warn hidden">Download Diff CSV</button>
-    </div>
-    <div id="msg" class="muted" style="margin-top:8px" role="status" aria-live="polite"></div>
-  </div>
-
-  <div id="summary" class="card hidden" aria-live="polite">
-    <div class="stats">
-      <span id="addedCount" class="pill ok">Added: 0</span>
-      <span id="removedCount" class="pill bad">Removed: 0</span>
-      <span id="modifiedCount" class="pill warnpill">Modified: 0</span>
-    </div>
-  </div>
-
-  <div id="tabs" class="hidden">
-    <div class="card">
-      <div class="sticky-controls">
-        <h3 style="margin:0 0 8px 0">Added (exist in B, not in A)</h3>
-        <div class="muted">Tick rows to <b>add</b> into the merge.</div>
-      </div>
-      <div class="tbl"><table id="tblAdded"></table></div>
-    </div>
-
-    <div class="card">
-      <div class="sticky-controls">
-        <h3 style="margin:0 0 8px 0">Removed (exist in A, not in B)</h3>
-        <div class="muted">Tick rows to <b>keep from A</b> in the merge; untick to remove.</div>
-      </div>
-      <div class="tbl"><table id="tblRemoved"></table></div>
-    </div>
-
-    <div class="card">
-      <div class="sticky-controls">
-        <h3 style="margin:0 0 8px 0">Modified (in both, but some cells differ)</h3>
-        <div class="muted">Choose per cell: keep A or B. Quick: “Accept all B in row”.</div>
-      </div>
-      <div class="tbl"><table id="tblModified"></table></div>
-    </div>
-  </div>
-
-  <div class="footer">Tip: large files work best if saved as CSV first. Choose a unique key.</div>
-</div>
+<body class="h-screen">
+<div id="app" class="h-full"></div>
 
 <script>
-/* ===== Utilities (compat-safe; no replaceAll) ===== */
-function escHtml(s){ s=(s==null?"":String(s)); return s.split("&").join("&amp;").split("<").join("&lt;").split(">").join("&gt;").split('"').join("&quot;"); }
-function trim(v){ return (v==null?"":String(v)).trim(); }
-const $ = (sel)=>document.querySelector(sel);
-function setMsg(t){ $("#msg").textContent = t; }
-function logErr(e){ console.error(e); setMsg((e && e.message) ? e.message : String(e)); }
+const {useState,useMemo,useRef,useEffect,useCallback} = React;
 
-/* ===== XLSX parsing/writing ===== */
-function ensureXLSX(){ if(typeof XLSX==="undefined") throw new Error("Failed to load Excel parser library."); }
-async function readFileToWorkbook(file){ if(!file) throw new Error("Please select both files."); ensureXLSX(); const buf=await file.arrayBuffer(); return XLSX.read(buf,{type:"array"}); }
-function sheetToRows(workbook, sheetName){
-  const sName = (sheetName && workbook.Sheets[sheetName]) ? sheetName : workbook.SheetNames[0];
-  if(!sName) throw new Error("No worksheet found in the file.");
-  const ws = workbook.Sheets[sName];
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
-  if(!rows.length) return { headers: [], rows: [] };
-  const headers = rows[0].map(h=>trim(h));
-  const data = rows.slice(1).map(r=>{
-    const o={}; for(let i=0;i<headers.length;i++) o[headers[i]] = trim(r[i]||""); return o;
-  }).filter(o => Object.values(o).some(v=>v!==""));
-  return { headers, rows: data };
+/* utils */
+const esc = (s)=> (s==null?"":String(s));
+const trim = (s)=> esc(s).trim();
+const shallowCopy = (o)=> Object.assign({}, o);
+const keyFor = (rowKey,col)=> `${rowKey}|${col}`;
+
+/* xlsx helpers */
+function ensureXLSX(){ if(typeof XLSX==='undefined') throw new Error('XLSX not loaded'); }
+async function readWorkbook(file){ ensureXLSX(); const buf=await file.arrayBuffer(); return XLSX.read(buf,{type:'array'}); }
+function sheetToRows(wb, sheet){
+  const name = (sheet && wb.Sheets[sheet]) ? sheet : wb.SheetNames[0];
+  const ws = wb.Sheets[name]; if(!ws) return {headers:[],rows:[]};
+  const arr = XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+  if(!arr.length) return {headers:[],rows:[]};
+  const headers = arr[0].map(h=>trim(h));
+  const rows = arr.slice(1).map(r=>{
+    const o={}; for(let i=0;i<headers.length;i++) o[headers[i]] = trim(r[i] ?? '');
+    return o;
+  }).filter(o=> Object.values(o).some(v=>v!==''));
+  return {headers,rows};
 }
 function writeXLSX(filename, headers, rows){
-  const aoa = [headers];
-  rows.forEach(r=> aoa.push(headers.map(h=> r[h] != null ? r[h] : "" )));
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Merged");
-  XLSX.writeFile(wb, filename);
+  const aoa=[headers]; rows.forEach(r=> aoa.push(headers.map(h=> esc(r[h]??""))));
+  const ws = XLSX.utils.aoa_to_sheet(aoa); const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Merged'); XLSX.writeFile(wb, filename);
 }
 
-/* ===== Diff helpers ===== */
-function unionHeaders(a,b){ const set=new Set(a); b.forEach(h=>set.add(h)); return Array.from(set); }
-function normalizeRow(row, headers){ const o={}; headers.forEach(h=>o[h]=trim(row[h]||"")); return o; }
-function indexByKey(rows, key){ const m=new Map(); rows.forEach(r=>{ const k=r[key]; if(k!=null) m.set(String(k), r); }); return m; }
-
-/* ===== Rendering ===== */
-function buildAddedTable(tableEl, headers, rows, key){
-  const head = "<thead><tr><th>Select</th>"+headers.map(h=>"<th>"+escHtml(h)+"</th>").join("")+"</tr></thead>";
-  let body="";
-  if(!rows.length){ body = `<tbody><tr><td colspan="${headers.length+1}" class="muted">None</td></tr></tbody>`; }
-  else{
-    body = "<tbody>"+rows.map(r=>{
-      const k = escHtml(r[key]||"");
-      const tds = headers.map(h=>`<td>${escHtml(r[h]||"")}</td>`).join("");
-      return `<tr data-key="${k}"><td class="choiceCell"><input type="checkbox" class="addRow"></td>${tds}</tr>`;
-    }).join("")+"</tbody>";
-  }
-  tableEl.innerHTML = head + body;
+/* diff */
+function unionHeaders(a,b){ const s=new Set(a); b.forEach(h=>s.add(h)); return [...s]; }
+function normalizeRow(row, headers, {trimSpaces,caseInsensitive}){
+  const o={}; headers.forEach(h=>{
+    let v = esc(row[h] ?? '');
+    if(trimSpaces) v = v.trim();
+    if(caseInsensitive) v = v.toLowerCase();
+    o[h]=v;
+  }); return o;
 }
-
-function buildRemovedTable(tableEl, headers, rows, key){
-  const head = "<thead><tr><th>Keep A?</th>"+headers.map(h=>"<th>"+escHtml(h)+"</th>").join("")+"</tr></thead>";
-  let body="";
-  if(!rows.length){ body = `<tbody><tr><td colspan="${headers.length+1}" class="muted">None</td></tr></tbody>`; }
-  else{
-    body = "<tbody>"+rows.map(r=>{
-      const k = escHtml(r[key]||"");
-      const tds = headers.map(h=>`<td>${escHtml(r[h]||"")}</td>`).join("");
-      // default: checked (keep from A)
-      return `<tr data-key="${k}"><td class="choiceCell"><input type="checkbox" class="keepA" checked></td>${tds}</tr>`;
-    }).join("")+"</tbody>";
-  }
-  tableEl.innerHTML = head + body;
-}
-
-function buildModifiedTable(tableEl, headers, mods, key){
-  const head = "<thead><tr><th>Key</th><th>Quick</th>"+headers.filter(h=>h!==key).map(h=>"<th>"+escHtml(h)+"</th>").join("")+"</tr></thead>";
-  let body="";
-  if(!mods.length){ body = `<tbody><tr><td colspan="${headers.length+2}" class="muted">None</td></tr></tbody>`; }
-  else{
-    body = "<tbody>"+mods.map(m=>{
-      const keyCell = `<td class="key">${escHtml(m.key)}</td>`;
-      const quick = `<td class="choiceCell"><button type="button" class="acceptRowB" data-key="${escHtml(m.key)}">Accept all B (row)</button></td>`;
-      const cells = headers.filter(h=>h!==key).map(h=>{
-        const a = m.before[h]||"", b = m.after[h]||"";
-        if(a===b){
-          return `<td>${escHtml(b)}</td>`;
-        }else{
-          const name = `${escHtml(m.key)}__${escHtml(h)}`;
-          return `<td class="diff">
-            <div class="before"><label><input type="radio" name="${name}" value="A" checked> A: ${escHtml(a)}</label></div>
-            <div class="after"><label><input type="radio" name="${name}" value="B"> B: ${escHtml(b)}</label></div>
-          </td>`;
-        }
-      }).join("");
-      return `<tr data-key="${escHtml(m.key)}">${keyCell}${quick}${cells}</tr>`;
-    }).join("")+"</tbody>";
-  }
-  tableEl.innerHTML = head + body;
-
-  // Wire row "Accept all B" buttons
-  tableEl.querySelectorAll(".acceptRowB").forEach(btn=>{
-    btn.addEventListener("click", ()=>{
-      const keyVal = btn.getAttribute("data-key");
-      const row = tableEl.querySelector(`tr[data-key="${CSS.escape(keyVal)}"]`);
-      if(!row) return;
-      row.querySelectorAll('input[type="radio"][value="B"]').forEach(r=>{ r.checked = true; });
-    });
-  });
-}
-
-/* ===== CSV helpers ===== */
-function toCSV(headers, rows){
-  const esc = (v)=>{ const s=(v==null?"":String(v)); return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
-  const lines = [];
-  lines.push(headers.map(esc).join(","));
-  rows.forEach(r=> lines.push(headers.map(h=> esc(r[h]||"")).join(",")) );
-  return lines.join("\n");
-}
-function diffCSV(headers, key, added, removed, modified){
-  const other = headers.filter(h=>h!==key);
-  const head = ["ChangeType", key].concat(other, [].concat.apply([], other.map(h=>[h+"_old", h+"_new"])));
-  const esc = (v)=>{ const s=(v==null?"":String(v)); return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
-  const lines = []; lines.push(head.map(esc).join(","));
-  function write(typ, r, oldNew, before, after){
-    const base = [typ, r[key]||""].concat(other.map(h=>r[h]||""));
-    const tail = oldNew ? [].concat.apply([], other.map(h=>[(before[h]||""),(after[h]||"")])) : [].concat.apply([], other.map(()=>["",""]));
-    lines.push(base.concat(tail).map(esc).join(","));
-  }
-  added.forEach(r=>write("Added", r, false));
-  removed.forEach(r=>write("Removed", r, false));
-  modified.forEach(m=>write("Modified", m.after, true, m.before, m.after));
-  return lines.join("\n");
-}
-function downloadFile(name, mime, textOrBlob){
-  const blob = textOrBlob instanceof Blob ? textOrBlob : new Blob([textOrBlob], {type:mime});
-  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; a.click(); URL.revokeObjectURL(a.href);
-}
-
-/* ===== App state ===== */
-let HEADERS=[], KEY="";
-let Arows=[], Brows=[];
-let mapA, mapB;
-let ADDED=[], REMOVED=[], MODS=[];
-let mergedRows=[]; // built on demand
-
-/* ===== Build merged based on user choices ===== */
-function buildMerged(){
-  // baseline = A
-  const resultMap = new Map(mapA); // shallow copy (objects reused; we overwrite where needed)
-  // Removed: keepA checkbox (default checked). If unchecked -> delete.
-  document.querySelectorAll("#tblRemoved .keepA").forEach(chk=>{
-    const tr = chk.closest("tr"); const k = tr.getAttribute("data-key");
-    if(!chk.checked){ resultMap.delete(k); }
-  });
-  // Added: addRow checkbox (if checked -> insert row from B)
-  document.querySelectorAll("#tblAdded .addRow").forEach(chk=>{
-    const tr = chk.closest("tr"); const k = tr.getAttribute("data-key");
-    if(chk.checked){ resultMap.set(k, mapB.get(k)); }
-  });
-  // Modified: per-cell radios (A vs B). Start from existing (A or B depending above); overwrite chosen "B".
-  // For modified keys, we ensure base is A then apply cell choices.
-  MODS.forEach(m=>{
-    const k = m.key;
-    const base = (resultMap.get(k) ? {...resultMap.get(k)} : {...m.before});
-    // For each differing column, if radio selected B => take m.after[col]
-    const diffCols = Object.keys(m.before).concat(Object.keys(m.after));
-    const uniq = Array.from(new Set(diffCols));
-    uniq.forEach(col=>{
-      if(col===KEY) return;
-      const name = `${k}__${col}`;
-      const radios = document.getElementsByName(name);
-      let chooseB=false;
-      for(let i=0;i<radios.length;i++){ if(radios[i].checked && radios[i].value==="B"){ chooseB=true; break; } }
-      if(chooseB){ base[col] = m.after[col] || ""; } else { base[col] = m.before[col] || ""; }
-    });
-    resultMap.set(k, base);
-  });
-
-  // To array in consistent header order
-  const out = [];
-  resultMap.forEach(v=> out.push(v));
-  // Keep stable ordering by KEY if present
-  out.sort((x,y)=> String(x[KEY]||"").localeCompare(String(y[KEY]||"")));
-  mergedRows = out;
-}
-
-/* ===== Main wiring ===== */
-window.addEventListener("DOMContentLoaded", ()=>{
-  const compareBtn = $("#compareBtn");
-  const btnMergedX = $("#downloadMergedXLSX");
-  const btnMergedC = $("#downloadMergedCSV");
-  const btnDiffCSV = $("#downloadDiffCSV");
-
-  $("#fileA").addEventListener("change", ()=>{
-    $("#keySelect").innerHTML = `<option value="">(auto from A’s first header)</option>`;
-    $("#keySelect").dataset.populated = "";
-  });
-
-  compareBtn.addEventListener("click", async ()=>{
-    try{
-      setMsg(""); $("#summary").classList.add("hidden"); $("#tabs").classList.add("hidden");
-      btnMergedX.classList.add("hidden"); btnMergedC.classList.add("hidden"); btnDiffCSV.classList.add("hidden");
-
-      const fA = $("#fileA").files[0], fB = $("#fileB").files[0];
-      if(!fA || !fB) throw new Error("Please select both files.");
-
-      const [wbA, wbB] = await Promise.all([readFileToWorkbook(fA), readFileToWorkbook(fB)]);
-      const sheet = trim($("#sheetName").value) || undefined;
-      const A = sheetToRows(wbA, sheet), B = sheetToRows(wbB, sheet);
-      if(!A.headers.length) throw new Error("Main (A) has no headers.");
-      if(!B.headers.length) throw new Error("Other (B) has no headers.");
-
-      // headers & key
-      HEADERS = unionHeaders(A.headers, B.headers);
-      const keySel = $("#keySelect");
-      if(keySel.dataset.populated !== "1"){
-        keySel.innerHTML = `<option value="">(auto from A’s first header: ${escHtml(A.headers[0])})</option>`
-          + A.headers.map(h=>`<option value="${escHtml(h)}">${escHtml(h)}</option>`).join("");
-        keySel.dataset.populated = "1";
-      }
-      KEY = trim(keySel.value) || A.headers[0];
-      if(HEADERS.indexOf(KEY)===-1) throw new Error('Key "'+KEY+'" not found.');
-
-      // normalize + index
-      Arows = A.rows.map(r=>normalizeRow(r, HEADERS));
-      Brows = B.rows.map(r=>normalizeRow(r, HEADERS));
-      mapA = indexByKey(Arows, KEY); mapB = indexByKey(Brows, KEY);
-
-      const keysA = Array.from(mapA.keys()), keysB = Array.from(mapB.keys());
-      const setA = new Set(keysA), setB = new Set(keysB);
-
-      ADDED = []; REMOVED = []; MODS = [];
-
-      // Added & Modified
-      keysB.forEach(k=>{
-        if(!setA.has(k)){ ADDED.push(mapB.get(k)); }
-        else{
-          const a = mapA.get(k), b = mapB.get(k);
-          const changedCols = [];
-          HEADERS.forEach(h=>{ if(h!==KEY && (a[h]||"") !== (b[h]||"")) changedCols.push(h); });
-          if(changedCols.length){
-            const before = {}; const after = {};
-            HEADERS.forEach(h=>{ before[h] = a[h]||""; after[h] = b[h]||""; });
-            MODS.push({ key:k, before, after, changedCols });
-          }
-        }
+function indexBy(rows, key){ const m=new Map(); rows.forEach(r=>{ const k=r[key]; if(k!=null)m.set(String(k), r);}); return m; }
+function computeDiff({Arows,Brows,headers,key}) {
+  const mapA=indexBy(Arows,key), mapB=indexBy(Brows,key);
+  const keysA=[...mapA.keys()], keysB=[...mapB.keys()];
+  const setA=new Set(keysA), setB=new Set(keysB);
+  const added=[], removed=[], modified=[], unchanged=[];
+  keysB.forEach(k=>{
+    if(!setA.has(k)) { added.push(k); }
+    else{
+      const a = mapA.get(k), b = mapB.get(k);
+      let changed=false;
+      headers.forEach(h=>{
+        if(h===key) return;
+        if(esc(a[h])!==esc(b[h])) changed=true;
       });
-      // Removed
-      keysA.forEach(k=>{ if(!setB.has(k)) REMOVED.push(mapA.get(k)); });
-
-      // Sort
-      const cmpKey = (x,y)=> String(x[KEY]||"").localeCompare(String(y[KEY]||""));
-      ADDED.sort(cmpKey); REMOVED.sort(cmpKey);
-      MODS.sort((x,y)=> String(x.key).localeCompare(String(y.key)));
-
-      // Summary
-      $("#addedCount").textContent = "Added: "+ADDED.length;
-      $("#removedCount").textContent = "Removed: "+REMOVED.length;
-      $("#modifiedCount").textContent = "Modified: "+MODS.length;
-      $("#summary").classList.remove("hidden");
-
-      // Build tables
-      buildAddedTable($("#tblAdded"), HEADERS, ADDED, KEY);
-      buildRemovedTable($("#tblRemoved"), HEADERS, REMOVED, KEY);
-      // Convert MODS to rendering-friendly shape: changed set
-      const modsForUI = MODS.map(m=>({ key:m.key, before:m.before, after:m.after }));
-      // In build, we decide per-cell by comparing values (same logic)
-      buildModifiedTable($("#tblModified"), HEADERS, modsForUI, KEY);
-      $("#tabs").classList.remove("hidden");
-
-      // Enable downloads
-      btnMergedX.classList.remove("hidden");
-      btnMergedC.classList.remove("hidden");
-      btnDiffCSV.classList.remove("hidden");
-
-      setMsg("Compared: "+(fA.name||"A")+" vs "+(fB.name||"B")+". Choose your changes, then download the merged file.");
-    }catch(e){ logErr(e); }
+      if(changed) modified.push(k); else unchanged.push(k);
+    }
   });
-
-  btnMergedX.addEventListener("click", ()=>{
-    buildMerged();
-    writeXLSX("merged.xlsx", HEADERS, mergedRows);
+  keysA.forEach(k=>{ if(!setB.has(k)) removed.push(k); });
+  const cells=[];
+  const allKeys=[...new Set([...keysA,...keysB])];
+  allKeys.forEach(rowKey=>{
+    const a = mapA.get(rowKey) || {};
+    const b = mapB.get(rowKey) || {};
+    headers.forEach(col=>{
+      if(col===key) return;
+      const hasA = a[col]!=null && a[col]!=='';
+      const hasB = b[col]!=null && b[col]!=='';
+      const equal = esc(a[col])===esc(b[col]);
+      cells.push({ rowKey, column: col, left: a[col]??'', right: b[col]??'', equal, missingLeft: !hasA, missingRight: !hasB });
+    });
   });
+  return { mapA, mapB, added, removed, modified, unchanged, cells };
+}
 
-  btnMergedC.addEventListener("click", ()=>{
-    buildMerged();
-    const csv = toCSV(HEADERS, mergedRows);
-    downloadFile("merged.csv", "text/csv;charset=utf-8;", csv);
+/* csv */
+function toCSV(headers, rows){
+  const escq=(v)=>{ const s=esc(v); return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
+  const lines=[headers.map(escq).join(",")];
+  rows.forEach(r=> lines.push(headers.map(h=> escq(r[h]??"")).join(",")));
+  return lines.join("\n");
+}
+function toDiffCSV(headers, key, {added,removed,modified}, {mapA,mapB}){
+  const other=headers.filter(h=>h!==key);
+  const head=["ChangeType",key,...other, ...other.flatMap(h=>[h+"_old",h+"_new"])];
+  const escq=(v)=>{ const s=esc(v); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
+  const lines=[head.map(escq).join(",")];
+  added.forEach(k=>{
+    const r=mapB.get(k)||{}; lines.push(["Added",k,...other.map(h=>esc(r[h]??"")), ...other.flatMap(()=>["",""])].map(escq).join(","));
   });
+  removed.forEach(k=>{
+    const r=mapA.get(k)||{}; lines.push(["Removed",k,...other.map(h=>esc(r[h]??"")), ...other.flatMap(()=>["",""])].map(escq).join(","));
+  });
+  modified.forEach(k=>{
+    const a=mapA.get(k)||{}, b=mapB.get(k)||{};
+    lines.push(["Modified",k,...other.map(h=>esc(b[h]??"")), ...other.flatMap(h=>[esc(a[h]??""),esc(b[h]??"")])].map(escq).join(","));
+  });
+  return lines.join("\n");
+}
 
-  btnDiffCSV.addEventListener("click", ()=>{
-    const diff = diffCSV(HEADERS, KEY, ADDED, REMOVED, MODS.map(m=>({before:m.before, after:m.after})));
-    downloadFile("diff_audit.csv", "text/csv;charset=utf-8;", diff);
+/* history */
+function useHistoryState(initial){
+  const [state,setState]=useState(initial);
+  const undoRef=useRef([]), redoRef=useRef([]);
+  const apply=(updater)=>{
+    undoRef.current.push(state);
+    redoRef.current.length=0;
+    setState(typeof updater==='function'? updater(state) : updater);
+  };
+  const undo=()=>{ const prev=undoRef.current.pop(); if(prev){ redoRef.current.push(state); setState(prev); } };
+  const redo=()=>{ const next=redoRef.current.pop(); if(next){ undoRef.current.push(state); setState(next); } };
+  return [state,apply,undo,redo];
+}
+
+/* app */
+function App(){
+  const [files,setFiles]=useState({A:null,B:null});
+  const [names,setNames]=useState({A:'',B:''});
+  const [sheet,setSheet]=useState('');
+  const [headers,setHeaders]=useState([]);
+  const [key,setKey]=useState('');
+  const [maps,setMaps]=useState({mapA:new Map(),mapB:new Map()});
+  const [sets,setSets]=useState({added:[],removed:[],modified:[],unchanged:[]});
+  const [cells,setCells]=useState([]);
+  const [ui,applyUI,undoUI,redoUI]=useHistoryState({
+    filters:{showEqual:true,onlyModified:false,onlyAdded:false,onlyRemoved:false, trim:false, ci:false},
+    resolutions:{}, columnRules:[], selection:null
   });
-});
+  const [ready,setReady]=useState(false);
+  const gridRef=useRef(null);
+  const searchRef=useRef(null);
+  const [toast,setToast]=useState('');
+  const [preview,setPreview]=useState({open:false, rows:[]});
+
+  const counters = { Added: sets.added.length, Removed: sets.removed.length, Modified: sets.modified.length, Unchanged: sets.unchanged.length };
+
+  const handleCompare = async ()=>{
+    try{
+      if(!files.A || !files.B) throw new Error('Select both files');
+      setToast('Parsing…');
+      const [wbA,wbB] = await Promise.all([readWorkbook(files.A), readWorkbook(files.B)]);
+      const A = sheetToRows(wbA, sheet || undefined);
+      const B = sheetToRows(wbB, sheet || undefined);
+      if(!A.headers.length || !B.headers.length) throw new Error('Missing headers');
+      const allHeaders = unionHeaders(A.headers,B.headers);
+      const k = key || A.headers[0];
+      const Arows = A.rows.map(r=> normalizeRow(r, allHeaders, {trimSpaces:ui.filters.trim, caseInsensitive:ui.filters.ci}));
+      const Brows = B.rows.map(r=> normalizeRow(r, allHeaders, {trimSpaces:ui.filters.trim, caseInsensitive:ui.filters.ci}));
+      const {mapA,mapB,added,removed,modified,unchanged,cells} = computeDiff({Arows,Brows,headers:allHeaders,key:k});
+      setHeaders(allHeaders); setKey(k); setCells(cells); setMaps({mapA,mapB}); setSets({added,removed,modified,unchanged});
+      setNames({A:files.A.name,B:files.B.name}); setReady(true); setToast('Done.');
+      setTimeout(()=> gridRef.current?.focus(), 0);
+    }catch(e){ setToast(e.message||String(e)); }
+  };
+
+  const filteredRowKeys = useMemo(()=>{
+    const allKeys = new Set([...maps.mapA.keys(), ...maps.mapB.keys()]);
+    const out = [];
+    allKeys.forEach(k=>{
+      const isAdded = sets.added.includes(k);
+      const isRemoved = sets.removed.includes(k);
+      const isModified = sets.modified.includes(k);
+      const isUnchanged = sets.unchanged.includes(k);
+      if(ui.filters.onlyAdded && !isAdded) return;
+      if(ui.filters.onlyRemoved && !isRemoved) return;
+      if(ui.filters.onlyModified && !isModified) return;
+      if(!ui.filters.showEqual && isUnchanged) return;
+      out.push(k);
+    });
+    out.sort((a,b)=> String(a).localeCompare(String(b)));
+    return out;
+  },[maps,sets,ui.filters]);
+
+  const buildMerged = ()=>{
+    const resMap = new Map(maps.mapA);
+    filteredRowKeys.forEach(k=>{
+      const rowA = maps.mapA.get(k), rowB = maps.mapB.get(k);
+      if(sets.added.includes(k)){
+        const r = ui.resolutions[keyFor(k,'__ROW__')];
+        if(r?.kind==='right') resMap.set(k, rowB);
+      }
+      if(sets.removed.includes(k)){
+        const r = ui.resolutions[keyFor(k,'__ROW__')];
+        if(r?.kind==='left') resMap.set(k, rowA); else resMap.delete(k);
+      }
+      if(sets.modified.includes(k)){
+        const base = shallowCopy(rowA || {});
+        headers.forEach(col=>{
+          if(col===key) { base[col] = (rowA?.[col]) ?? (rowB?.[col]) ?? ''; return; }
+          const rule = ui.columnRules.find(r=>r.column===col);
+          const res = ui.resolutions[keyFor(k,col)];
+          let val = (rowA?.[col]) ?? '';
+          let valB = (rowB?.[col]) ?? '';
+          if(rule){
+            if(rule.rule==='preferRight') val = valB;
+            else if(rule.rule==='preferLeft') val = val;
+            else if(rule.rule==='preferLeftIfRightBlank') val = (valB===''? val : valB);
+            else if(rule.rule==='preferLarger'){
+              const na = Number(val), nb = Number(valB);
+              if(!Number.isNaN(na) && !Number.isNaN(nb)) val = (nb>na? valB : val);
+            }else if(rule.rule==='preferSmaller'){
+              const na = Number(val), nb = Number(valB);
+              if(!Number.isNaN(na) && !Number.isNaN(nb)) val = (nb<na? valB : val);
+            }else if(rule.rule==='normalize'){
+              const t = (x)=> esc(x).trim();
+              val = t(val); valB = t(valB);
+            }
+          }
+          if(res?.kind==='right') val = valB;
+          else if(res?.kind==='custom') val = esc(res.value);
+          base[col] = val;
+        });
+        resMap.set(k, base);
+      }
+    });
+    const out=[]; resMap.forEach(v=> out.push(v));
+    out.sort((a,b)=> esc(a?.[key]).localeCompare(esc(b?.[key])));
+    return out;
+  };
+
+  /* resolutions */
+  const setRowChoice = (rowKey, choice)=> applyUI(d=>{
+    const cp = {...d}; cp.resolutions = {...cp.resolutions, [keyFor(rowKey,'__ROW__')]: {kind: choice} }; return cp;
+  });
+  const setCellChoice = (rowKey,col, choice)=> applyUI(d=>{
+    const cp = {...d}; cp.resolutions = {...cp.resolutions, [keyFor(rowKey,col)]: choice}; return cp;
+  });
+  const preferInRow = (rowKey, side)=> applyUI(d=>{
+    const cp={...d}; headers.forEach(col=>{
+      if(col===key) return;
+      const a = maps.mapA.get(rowKey)?.[col] ?? '';
+      const b = maps.mapB.get(rowKey)?.[col] ?? '';
+      if(esc(a)!==esc(b)) cp.resolutions[keyFor(rowKey,col)] = {kind: side};
+    }); return cp;
+  });
+  const toggleFilterChip = (chip)=> applyUI(d=>{
+    const f={...d.filters};
+    if(chip==='Hide equal') f.showEqual = !f.showEqual;
+    if(chip==='Only modified') f.onlyModified = !f.onlyModified;
+    if(chip==='Only added') f.onlyAdded = !f.onlyAdded;
+    if(chip==='Only removed') f.onlyRemoved = !f.onlyRemoved;
+    if(chip==='Trim spaces') f.trim = !f.trim;
+    if(chip==='Case-insensitive') f.ci = !f.ci;
+    return {...d, filters:f};
+  });
+  const addColumnRule = (column, rule)=> applyUI(d=> ({...d, columnRules:[...d.columnRules.filter(r=>r.column!==column), {column, rule}]}));
+  const clearColumnRule = (column)=> applyUI(d=> ({...d, columnRules:d.columnRules.filter(r=>r.column!==column)}));
+  const selectCell = (rowKey,col)=> applyUI(d=> ({...d, selection:{rowKey, column:col}}));
+
+  /* keyboard shortcuts */
+  useEffect(()=>{
+    const handler = (e)=>{
+      const tag = (e.target && e.target.tagName || '').toLowerCase();
+      const inInput = tag==='input' || tag==='textarea' || e.target.isContentEditable;
+      const k = e.key;
+      if(k==='/'){ if(!inInput){ e.preventDefault(); searchRef.current?.focus(); } return; }
+      if(k==='f' || k==='F'){ if(!inInput){ e.preventDefault(); toggleFilterChip('Only modified'); } return; }
+      if(k==='p' || k==='P'){ if(!inInput){ e.preventDefault(); const rows = buildMerged(); setPreview({open:true, rows}); } return; }
+      if(k==='u' || k==='U'){
+        e.preventDefault();
+        if(e.shiftKey) redoUI(); else undoUI();
+        return;
+      }
+      if(k==='Escape' && preview.open){ e.preventDefault(); setPreview(p=>({...p, open:false})); return; }
+    };
+    window.addEventListener('keydown', handler);
+    return ()=> window.removeEventListener('keydown', handler);
+  }, [ui, preview.open, headers, sets, maps]);
+
+  /* grid rows */
+  const gridModel = useMemo(()=>{
+    const rows = filteredRowKeys.map(k=>{
+      const a = maps.mapA.get(k)||{}, b = maps.mapB.get(k)||{};
+      const status = sets.added.includes(k) ? 'added' : sets.removed.includes(k) ? 'removed' : sets.modified.includes(k) ? 'modified' : 'unchanged';
+      const cols = headers.filter(h=>h!==key).map(col=>{
+        const left=a[col]??'', right=b[col]??'';
+        const equal = esc(left)===esc(right);
+        return {rowKey:k, column:col, left, right, equal, missingLeft: (left===''), missingRight:(right==='')};
+      });
+      return {rowKey:k, status, cells:cols};
+    });
+    return rows;
+  },[filteredRowKeys,headers,maps,sets]);
+
+  return (
+    <div className="flex h-screen flex-col">
+      {/* Top bar */}
+      <div className="sticky-top border-b px-3 py-2">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-sm">
+            <span className="font-medium">{names.A||'Left.xlsx'}</span>
+            <span className="text-gray-400">▸</span>
+            <span className="font-medium">{names.B||'Right.xlsx'}</span>
+            {ready && <span className="ml-3 text-xs text-gray-500">Key: <b>{key}</b> • Columns: {headers.length}</span>}
+          </div>
+          <div className="flex items-center gap-2 text-xs">
+            <Chip label={`Added ${counters.Added}`} onClick={()=>toggleFilterChip('Only added')} active={ui.filters.onlyAdded}/>
+            <Chip label={`Removed ${counters.Removed}`} onClick={()=>toggleFilterChip('Only removed')} active={ui.filters.onlyRemoved}/>
+            <Chip label={`Modified ${counters.Modified}`} onClick={()=>toggleFilterChip('Only modified')} active={ui.filters.onlyModified}/>
+            <Chip label={`Unchanged ${counters.Unchanged}`} onClick={()=>toggleFilterChip('Hide equal')} active={!ui.filters.showEqual}/>
+            <span className="mx-2 text-gray-300">|</span>
+            <Chip label="Trim spaces" onClick={()=>toggleFilterChip('Trim spaces')} active={ui.filters.trim}/>
+            <Chip label="Case-insensitive" onClick={()=>toggleFilterChip('Case-insensitive')} active={ui.filters.ci}/>
+          </div>
+        </div>
+        {/* Upload + key picker */}
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+          <input type="file" className="border rounded px-2 py-1" onChange={e=> setFiles(s=>({...s,A:e.target.files[0]}))} accept=".xlsx,.xls,.csv"/>
+          <input type="file" className="border rounded px-2 py-1" onChange={e=> setFiles(s=>({...s,B:e.target.files[0]}))} accept=".xlsx,.xls,.csv"/>
+          <input type="text" placeholder="Worksheet (optional)" className="border rounded px-2 py-1" onChange={e=> setSheet(e.target.value)}/>
+          <input type="text" placeholder="Key (blank = first col of A)" className="border rounded px-2 py-1" value={key} onChange={e=> setKey(e.target.value)}/>
+          <button className="rounded bg-blue-600 text-white px-3 py-1" onClick={handleCompare}>Compare</button>
+          <input ref={searchRef} className="ml-3 border rounded px-2 py-1 text-xs" placeholder="Search  ( / to focus )"/>
+          <span className="text-xs text-gray-500">{toast}</span>
+        </div>
+      </div>
+
+      {/* Main */}
+      <div className="flex min-h-0 flex-1">
+        {/* Left: grid */}
+        <div className="flex-1 min-w-0">
+          <DiffGrid
+            refObj={gridRef}
+            headers={headers}
+            keyCol={key}
+            rows={gridModel}
+            ui={ui}
+            sets={sets}
+            onCellChoice={setCellChoice}
+            onRowChoice={setRowChoice}
+            onSelectCell={selectCell}
+            onPreferRow={preferInRow}
+            onAddColumnRule={(col,rule)=> addColumnRule(col,rule)}
+            onClearColumnRule={clearColumnRule}
+            searchRef={searchRef}
+          />
+        </div>
+        {/* Right: details panel */}
+        <aside className="w-[360px] border-l border-gray-200 shrink-0">
+          <DetailsPanel
+            selection={ui.selection}
+            headers={headers}
+            keyCol={key}
+            maps={maps}
+            onSetCell={setCellChoice}
+            onPreset={(side)=> ui.selection?.rowKey && preferInRow(ui.selection.rowKey, side)}
+          />
+        </aside>
+      </div>
+
+      {/* Footer */}
+      <div className="sticky-bottom border-t px-3 py-2 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <button className="rounded bg-gray-800 text-white px-3 py-1" title="U" onClick={undoUI}>Undo</button>
+          <button className="rounded bg-gray-800 text-white px-3 py-1" title="Shift+U" onClick={redoUI}>Redo</button>
+          <BulkRulesHelp/>
+        </div>
+        <div className="flex items-center gap-2">
+          <button className="rounded bg-slate-700 text-white px-3 py-1" title="P" onClick={()=>{ const rows=buildMerged(); setPreview({open:true, rows}); }}>Preview merged</button>
+          <button className="rounded bg-emerald-600 text-white px-3 py-1" onClick={()=>{
+            const merged = buildMerged(); writeXLSX('merged.xlsx', headers, merged);
+          }}>Export XLSX</button>
+          <button className="rounded bg-emerald-600 text-white px-3 py-1" onClick={()=>{
+            const merged = buildMerged(); const csv = toCSV(headers, merged);
+            download('merged.csv', 'text/csv;charset=utf-8;', csv);
+          }}>Export CSV</button>
+          <button className="rounded bg-amber-600 text-white px-3 py-1" onClick={()=>{
+            const csv = toDiffCSV(headers, key, sets, maps);
+            download('diff_audit.csv','text/csv;charset=utf-8;', csv);
+          }}>Export Diff CSV</button>
+        </div>
+      </div>
+
+      {/* Preview modal */}
+      {preview.open && (
+        <PreviewModal onClose={()=>setPreview(p=>({...p,open:false}))} headers={headers} rows={preview.rows}/>
+      )}
+    </div>
+  );
+}
+
+/* components */
+function Chip({label,active,onClick}){
+  return <button className={"px-2 py-1 rounded border text-xs "+(active?"bg-blue-600 text-white border-blue-600":"bg-white text-gray-700")}
+    onClick={onClick}>{label}</button>;
+}
+function BulkRulesHelp(){
+  return <div className="text-xs text-gray-500">
+    Bulk rules: column menu → Prefer Right/Left, Prefer larger/smaller, Normalize, Prefer Left if Right blank.
+  </div>;
+}
+function DetailsPanel({selection, headers, keyCol, maps, onSetCell, onPreset}){
+  if(!selection?.rowKey){
+    return <div className="p-3 text-sm text-gray-500">Select a cell/row to review differences.</div>;
+  }
+  const k = selection.rowKey;
+  const a = maps.mapA.get(k) || {};
+  const b = maps.mapB.get(k) || {};
+  const diffs = headers.filter(h=>h!==keyCol && (esc(a[h]??'')!==esc(b[h]??'')));
+  return (
+    <div className="p-3 space-y-3">
+      <h3 className="font-semibold text-sm">Row {k}</h3>
+      <div className="flex gap-2">
+        <button className="rounded bg-gray-800 text-white px-2 py-1 text-xs" onClick={()=>onPreset('left')}>Prefer Left</button>
+        <button className="rounded bg-gray-800 text-white px-2 py-1 text-xs" onClick={()=>onPreset('right')}>Prefer Right</button>
+      </div>
+      <div className="space-y-2 max-h-[70vh] overflow-auto pr-1">
+        {diffs.map(col=>(
+          <div key={col} className="border rounded p-2">
+            <div className="text-xs text-gray-500">{col}</div>
+            <div className="mt-1 grid grid-cols-2 gap-2 text-xs">
+              <label className="flex items-center gap-2">
+                <input type="radio" name={k+'|'+col} onChange={()=>onSetCell(k,col,{kind:'left'})}/>
+                <span className="truncate">Left: {esc(a[col]??'')}</span>
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="radio" name={k+'|'+col} onChange={()=>onSetCell(k,col,{kind:'right'})}/>
+                <span className="truncate">Right: {esc(b[col]??'')}</span>
+              </label>
+            </div>
+            <div className="mt-2">
+              <input className="w-full border rounded px-2 py-1 text-xs" placeholder="Custom value"
+                onBlur={(e)=> onSetCell(k,col,{kind:'custom', value:e.target.value}) }/>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+function DiffGrid({refObj, headers, keyCol, rows, ui, sets, onCellChoice, onRowChoice, onSelectCell, onPreferRow, onAddColumnRule, onClearColumnRule, searchRef}){
+  const containerRef = useRef(null);
+  const [scrollTop,setScrollTop]=useState(0);
+  const rowHeight=32, buffer=8;
+  const hAvail =  window.innerHeight - 140;
+  const visibleCount = Math.max(10, Math.floor(hAvail/rowHeight));
+  const total = rows.length;
+  const start = Math.max(0, Math.floor(scrollTop/rowHeight)-buffer);
+  const end = Math.min(total, start + visibleCount + buffer*2);
+  const offsetTop = start*rowHeight;
+  useEffect(()=>{ refObj.current = containerRef.current; },[]);
+  const onScroll=(e)=> setScrollTop(e.target.scrollTop);
+
+  useEffect(()=>{
+    if(!searchRef?.current) return;
+    const input = searchRef.current;
+    const onChange=(e)=>{
+      const q = e.target.value.toLowerCase();
+      const nodes = containerRef.current?.querySelectorAll('[data-row]');
+      if(!nodes) return;
+      nodes.forEach(n=>{
+        const t = (n.getAttribute('data-text')||'').toLowerCase();
+        n.style.display = q && !t.includes(q) ? 'none' : '';
+      });
+    };
+    input.addEventListener('input', onChange);
+    return ()=> input.removeEventListener('input', onChange);
+  },[]);
+
+  return (
+    <div className="h-full">
+      {/* Header */}
+      <div className="border-b grid text-xs font-medium" style={{gridTemplateColumns:`160px repeat(${headers.filter(h=>h!==keyCol).length}, minmax(120px, 1fr))`}}>
+        <div className="px-2 py-2 sticky-top bg-white">Row</div>
+        {headers.filter(h=>h!==keyCol).map(col=>(
+          <div key={col} className="px-2 py-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate" title={col}>{col}</span>
+              <ColumnMenu column={col} onRule={(c,r)=>onAddColumnRule(c,r)} onClear={onClearColumnRule}/>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Body (virtualized) */}
+      <div ref={containerRef} onScroll={onScroll} tabIndex={0}
+           className="h-[calc(100vh-220px)] overflow-auto outline-none scrollbar-thin">
+        <div style={{height: total*rowHeight+'px', position:'relative'}}>
+          <div style={{transform:`translateY(${offsetTop}px)`}}>
+            {rows.slice(start,end).map((r)=>{
+              const k = r.rowKey;
+              const isAdded = sets.added.includes(k);
+              const isRemoved = sets.removed.includes(k);
+              const rowText = JSON.stringify(r).slice(0,1000);
+              return (
+                <div key={k} data-row data-text={rowText}
+                     className={"grid text-xs row-hover border-b"} style={{gridTemplateColumns:`160px repeat(${r.cells.length}, minmax(120px, 1fr))`, height:rowHeight}}>
+                  {/* Row actions */}
+                  <div className="px-2 flex items-center gap-2">
+                    <span className="font-mono text-[11px]">{k}</span>
+                    {isAdded && (
+                      <label className="flex items-center gap-1">
+                        <input type="checkbox" onChange={e=> onRowChoice(k, e.target.checked?'right':'unset')} />
+                        <span>Add</span>
+                      </label>
+                    )}
+                    {isRemoved && (
+                      <label className="flex items-center gap-1">
+                        <input type="checkbox" defaultChecked onChange={e=> onRowChoice(k, e.target.checked?'left':'unset')} />
+                        <span>Keep</span>
+                      </label>
+                    )}
+                    {!isAdded && !isRemoved && (
+                      <button className="px-1 py-0.5 border rounded" onClick={()=> onPreferRow(k,'right')}>All B</button>
+                    )}
+                  </div>
+                  {/* Cells */}
+                  {r.cells.map(cell=>{
+                    const isMod = !cell.equal;
+                    const res = ui.resolutions[keyFor(cell.rowKey,cell.column)];
+                    const chosen = res?.kind==='right' ? 'R' : res?.kind==='left' ? 'L' : res?.kind==='custom' ? '✎' : '';
+                    const chosenValue = res?.kind==='right' ? cell.right : res?.kind==='custom' ? res.value : cell.left;
+                    const title = `${esc(cell.left)}  ⇄  ${esc(cell.right)}`;
+                    return (
+                      <div key={cell.column}
+                           className={"px-2 flex items-center justify-between gap-2 outline-none "+(isMod?'cell-mod':'')+" "+((cell.missingLeft||cell.missingRight)&&isMod?'cell-missing':'')}
+                           tabIndex={0} title={title}
+                           onKeyDown={(e)=>{
+                             if(e.key==='Enter' || e.key===' ') onCellChoice(cell.rowKey, cell.column, res?.kind==='right'?{kind:'left'}:{kind:'right'});
+                             if(e.key.toLowerCase()==='e'){
+                               const v = prompt('Custom value', esc(chosen?chosenValue:cell.left)); if(v!=null) onCellChoice(cell.rowKey, cell.column, {kind:'custom', value:v});
+                             }
+                           }}
+                           onClick={()=> onSelectCell(cell.rowKey, cell.column)}>
+                        <span className="truncate">{isMod ? esc(chosen?chosenValue:cell.right) : esc(cell.left)}</span>
+                        {chosen && <span className="badge" aria-label={chosen==='✎'?'Custom':(chosen==='R'?'Keep Right':'Keep Left')}>{chosen}</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+function ColumnMenu({column,onRule,onClear}){
+  const [open,setOpen]=useState(false);
+  return (
+    <div className="relative">
+      <button className="px-1 py-0.5 border rounded" onClick={()=>setOpen(o=>!o)} aria-haspopup="menu" aria-expanded={open}>⋮</button>
+      {open && (
+        <div className="absolute right-0 mt-1 w-56 bg-white border rounded shadow text-xs z-30">
+          <button className="block w-full text-left px-2 py-1 hover:bg-gray-50" onClick={()=>{onRule(column,'preferRight'); setOpen(false);}}>Prefer Right</button>
+          <button className="block w-full text-left px-2 py-1 hover:bg-gray-50" onClick={()=>{onRule(column,'preferLeft'); setOpen(false);}}>Prefer Left</button>
+          <button className="block w-full text-left px-2 py-1 hover:bg-gray-50" onClick={()=>{onRule(column,'preferLeftIfRightBlank'); setOpen(false);}}>If Right blank, keep Left</button>
+          <button className="block w-full text-left px-2 py-1 hover:bg-gray-50" onClick={()=>{onRule(column,'preferLarger'); setOpen(false);}}>Numeric: prefer larger</button>
+          <button className="block w-full text-left px-2 py-1 hover:bg-gray-50" onClick={()=>{onRule(column,'preferSmaller'); setOpen(false);}}>Numeric: prefer smaller</button>
+          <button className="block w-full text-left px-2 py-1 hover:bg-gray-50" onClick={()=>{onRule(column,'normalize'); setOpen(false);}}>Normalize (trim/case)</button>
+          <div className="border-t my-1"></div>
+          <button className="block w-full text-left px-2 py-1 text-red-600 hover:bg-red-50" onClick={()=>{onClear(column); setOpen(false);}}>Clear rule</button>
+        </div>
+      )}
+    </div>
+  );
+}
+function PreviewModal({onClose, headers, rows}){
+  return (
+    <div className="fixed inset-0 bg-black/40 z-40 flex items-center justify-center" onClick={onClose}>
+      <div className="bg-white rounded shadow-xl max-w-[90vw] max-h-[80vh] w-[900px] overflow-auto" onClick={e=>e.stopPropagation()}>
+        <div className="px-4 py-2 border-b flex items-center justify-between sticky top-0 bg-white">
+          <h3 className="font-semibold text-sm">Merged preview ({rows.length} rows)</h3>
+          <button className="px-2 py-1 border rounded text-xs" onClick={onClose}>Esc to close</button>
+        </div>
+        <div className="p-3">
+          <div className="overflow-auto border rounded">
+            <table className="text-xs min-w-full">
+              <thead className="sticky top-0 bg-white">
+                <tr>{headers.map(h=><th key={h} className="px-2 py-1 border-b text-left">{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {rows.slice(0,1000).map((r,i)=>(
+                  <tr key={i} className="odd:bg-gray-50">
+                    {headers.map(h=><td key={h} className="px-2 py-1 border-b">{esc(r[h]??'')}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {rows.length>1000 && <div className="text-xs text-gray-500 mt-2">Showing first 1000 rows.</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* helpers */
+function download(filename, mime, text){
+  const blob = new Blob([text], {type:mime}); const a=document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = filename; a.click(); URL.revokeObjectURL(a.href);
+}
+
+/* mount */
+ReactDOM.createRoot(document.getElementById('app')).render(<App />);
 </script>
 </body>
 </html>
