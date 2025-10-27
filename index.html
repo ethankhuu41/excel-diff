@@ -240,7 +240,7 @@ function App(){
     return out;
   };
 
-  /* resolutions */
+  /* handlers (single definitions — no duplicates) */
   const setRowChoice = (rowKey, choice)=> applyUI(d=>{
     const cp = {...d}; cp.resolutions = {...cp.resolutions, [keyFor(rowKey,'__ROW__')]: {kind: choice} }; return cp;
   });
@@ -399,12 +399,6 @@ function App(){
       )}
     </div>
   );
-
-  /* hoisted helpers inside App */
-  function addColumnRule(col,rule){ applyUI(d=> ({...d, columnRules:[...d.columnRules.filter(r=>r.column!==col), {column:col, rule}]})); }
-  function clearColumnRule(col){ applyUI(d=> ({...d, columnRules:d.columnRules.filter(r=>r.column!==col)})); }
-  function selectCell(rowKey,col){ applyUI(d=> ({...d, selection:{rowKey, column:col}})); }
-  function setRowChoice(rowKey,choice){ applyUI(d=> { const cp={...d}; cp.resolutions={...cp.resolutions,[keyFor(rowKey,'__ROW__')]:{kind:choice}}; return cp; }); }
 }
 
 /* components */
