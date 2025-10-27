@@ -13,10 +13,10 @@
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 
-<!-- SheetJS for Excel/CSV parse + write -->
+<!-- SheetJS -->
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
-<!-- Babel Standalone (must be BEFORE the text/babel app script) -->
+<!-- Babel (before text/babel) -->
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
 <style>
@@ -153,6 +153,14 @@ function App(){
   const searchRef=useRef(null);
   const [toast,setToast]=useState('');
   const [preview,setPreview]=useState({open:false, rows:[]});
+  const [showHelp,setShowHelp]=useState(false);
+
+  useEffect(()=>{
+    const seen = localStorage.getItem('helpSeen') === '1';
+    setShowHelp(!seen);
+  },[]);
+  const openHelp=()=> setShowHelp(true);
+  const closeHelp=()=> { setShowHelp(false); localStorage.setItem('helpSeen','1'); };
 
   const counters = { Added: sets.added.length, Removed: sets.removed.length, Modified: sets.modified.length, Unchanged: sets.unchanged.length };
 
@@ -240,7 +248,7 @@ function App(){
     return out;
   };
 
-  /* handlers (single definitions — no duplicates) */
+  /* handlers */
   const setRowChoice = (rowKey, choice)=> applyUI(d=>{
     const cp = {...d}; cp.resolutions = {...cp.resolutions, [keyFor(rowKey,'__ROW__')]: {kind: choice} }; return cp;
   });
@@ -323,6 +331,7 @@ function App(){
             <span className="mx-2 text-gray-300">|</span>
             <Chip label="Trim spaces" onClick={()=>toggleFilterChip('Trim spaces')} active={ui.filters.trim}/>
             <Chip label="Case-insensitive" onClick={()=>toggleFilterChip('Case-insensitive')} active={ui.filters.ci}/>
+            <button className="ml-3 px-3 py-1 rounded border text-xs hover:bg-gray-50" onClick={openHelp} title="Open help">Help</button>
           </div>
         </div>
         {/* Upload + key picker */}
@@ -339,7 +348,6 @@ function App(){
 
       {/* Main */}
       <div className="flex min-h-0 flex-1">
-        {/* Left: grid */}
         <div className="flex-1 min-w-0">
           <DiffGrid
             refObj={gridRef}
@@ -357,7 +365,6 @@ function App(){
             searchRef={searchRef}
           />
         </div>
-        {/* Right: details panel */}
         <aside className="w-[360px] border-l border-gray-200 shrink-0">
           <DetailsPanel
             selection={ui.selection}
@@ -394,30 +401,23 @@ function App(){
       </div>
 
       {/* Preview modal */}
-      {preview.open && (
-        <PreviewModal onClose={()=>setPreview(p=>({...p,open:false}))} headers={headers} rows={preview.rows}/>
-      )}
+      {preview.open && (<PreviewModal onClose={()=>setPreview(p=>({...p,open:false}))} headers={headers} rows={preview.rows}/>)}
+      {/* Help modal */}
+      {showHelp && (<HelpModal onClose={closeHelp} />)}
     </div>
   );
 }
 
 /* components */
 function Chip({label,active,onClick}){
-  return <button className={"px-2 py-1 rounded border text-xs "+(active?"bg-blue-600 text-white border-blue-600":"bg-white text-gray-700")}
-    onClick={onClick}>{label}</button>;
+  return <button className={"px-2 py-1 rounded border text-xs "+(active?"bg-blue-600 text-white border-blue-600":"bg-white text-gray-700")} onClick={onClick}>{label}</button>;
 }
 function BulkRulesHelp(){
-  return <div className="text-xs text-gray-500">
-    Bulk rules: column menu → Prefer Right/Left, Prefer larger/smaller, Normalize, Prefer Left if Right blank.
-  </div>;
+  return <div className="text-xs text-gray-500">Bulk rules: column menu → Prefer Right/Left, Prefer larger/smaller, Normalize, Prefer Left if Right blank.</div>;
 }
 function DetailsPanel({selection, headers, keyCol, maps, onSetCell, onPreset}){
-  if(!selection?.rowKey){
-    return <div className="p-3 text-sm text-gray-500">Select a cell/row to review differences.</div>;
-  }
-  const k = selection.rowKey;
-  const a = maps.mapA.get(k) || {};
-  const b = maps.mapB.get(k) || {};
+  if(!selection?.rowKey){ return <div className="p-3 text-sm text-gray-500">Select a cell/row to review differences.</div>; }
+  const k = selection.rowKey; const a = maps.mapA.get(k) || {}; const b = maps.mapB.get(k) || {};
   const diffs = headers.filter(h=>h!==keyCol && (esc(a[h]??'')!==esc(b[h]??'')));
   return (
     <div className="p-3 space-y-3">
@@ -431,19 +431,10 @@ function DetailsPanel({selection, headers, keyCol, maps, onSetCell, onPreset}){
           <div key={col} className="border rounded p-2">
             <div className="text-xs text-gray-500">{col}</div>
             <div className="mt-1 grid grid-cols-2 gap-2 text-xs">
-              <label className="flex items-center gap-2">
-                <input type="radio" name={k+'|'+col} onChange={()=>onSetCell(k,col,{kind:'left'})}/>
-                <span className="truncate">Left: {esc(a[col]??'')}</span>
-              </label>
-              <label className="flex items-center gap-2">
-                <input type="radio" name={k+'|'+col} onChange={()=>onSetCell(k,col,{kind:'right'})}/>
-                <span className="truncate">Right: {esc(b[col]??'')}</span>
-              </label>
+              <label className="flex items-center gap-2"><input type="radio" name={k+'|'+col} onChange={()=>onSetCell(k,col,{kind:'left'})}/><span className="truncate">Left: {esc(a[col]??'')}</span></label>
+              <label className="flex items-center gap-2"><input type="radio" name={k+'|'+col} onChange={()=>onSetCell(k,col,{kind:'right'})}/><span className="truncate">Right: {esc(b[col]??'')}</span></label>
             </div>
-            <div className="mt-2">
-              <input className="w-full border rounded px-2 py-1 text-xs" placeholder="Custom value"
-                onBlur={(e)=> onSetCell(k,col,{kind:'custom', value:e.target.value}) }/>
-            </div>
+            <div className="mt-2"><input className="w-full border rounded px-2 py-1 text-xs" placeholder="Custom value" onBlur={(e)=> onSetCell(k,col,{kind:'custom', value:e.target.value}) }/></div>
           </div>
         ))}
       </div>
@@ -481,7 +472,6 @@ function DiffGrid({refObj, headers, keyCol, rows, ui, sets, onCellChoice, onRowC
 
   return (
     <div className="h-full">
-      {/* Header */}
       <div className="border-b grid text-xs font-medium" style={{gridTemplateColumns:`160px repeat(${headers.filter(h=>h!==keyCol).length}, minmax(120px, 1fr))`}}>
         <div className="px-2 py-2 sticky-top bg-white">Row</div>
         {headers.filter(h=>h!==keyCol).map(col=>(
@@ -493,41 +483,21 @@ function DiffGrid({refObj, headers, keyCol, rows, ui, sets, onCellChoice, onRowC
           </div>
         ))}
       </div>
-
-      {/* Body (virtualized) */}
-      <div ref={containerRef} onScroll={onScroll} tabIndex={0}
-           className="h-[calc(100vh-220px)] overflow-auto outline-none scrollbar-thin">
-        <div style={{height: total*rowHeight+'px', position:'relative'}}>
+      <div ref={containerRef} onScroll={onScroll} tabIndex={0} className="h-[calc(100vh-220px)] overflow-auto outline-none scrollbar-thin">
+        <div style={{height: rows.length*rowHeight+'px', position:'relative'}}>
           <div style={{transform:`translateY(${offsetTop}px)`}}>
             {rows.slice(start,end).map((r)=>{
-              const k = r.rowKey;
-              const isAdded = sets.added.includes(k);
-              const isRemoved = sets.removed.includes(k);
+              const k = r.rowKey; const isAdded = sets.added.includes(k); const isRemoved = sets.removed.includes(k);
               const rowText = JSON.stringify(r).slice(0,1000);
               return (
-                <div key={k} data-row data-text={rowText}
-                     className="grid text-xs row-hover border-b"
+                <div key={k} data-row data-text={rowText} className="grid text-xs row-hover border-b"
                      style={{gridTemplateColumns:`160px repeat(${r.cells.length}, minmax(120px, 1fr))`, height:rowHeight}}>
-                  {/* Row actions */}
                   <div className="px-2 flex items-center gap-2">
                     <span className="font-mono text-[11px]">{k}</span>
-                    {isAdded && (
-                      <label className="flex items-center gap-1">
-                        <input type="checkbox" onChange={e=> onRowChoice(k, e.target.checked?'right':'unset')} />
-                        <span>Add</span>
-                      </label>
-                    )}
-                    {isRemoved && (
-                      <label className="flex items-center gap-1">
-                        <input type="checkbox" defaultChecked onChange={e=> onRowChoice(k, e.target.checked?'left':'unset')} />
-                        <span>Keep</span>
-                      </label>
-                    )}
-                    {!isAdded && !isRemoved && (
-                      <button className="px-1 py-0.5 border rounded" onClick={()=> onPreferRow(k,'right')}>All B</button>
-                    )}
+                    {isAdded && (<label className="flex items-center gap-1"><input type="checkbox" onChange={e=> onRowChoice(k, e.target.checked?'right':'unset')} /><span>Add</span></label>)}
+                    {isRemoved && (<label className="flex items-center gap-1"><input type="checkbox" defaultChecked onChange={e=> onRowChoice(k, e.target.checked?'left':'unset')} /><span>Keep</span></label>)}
+                    {!isAdded && !isRemoved && (<button className="px-1 py-0.5 border rounded" onClick={()=> onPreferRow(k,'right')}>All B</button>)}
                   </div>
-                  {/* Cells */}
                   {r.cells.map(cell=>{
                     const isMod = !cell.equal;
                     const res = ui.resolutions[keyFor(cell.rowKey,cell.column)];
@@ -585,7 +555,7 @@ function PreviewModal({onClose, headers, rows}){
       <div className="bg-white rounded shadow-xl max-w-[90vw] max-h-[80vh] w-[900px] overflow-auto" onClick={e=>e.stopPropagation()}>
         <div className="px-4 py-2 border-b flex items-center justify-between sticky top-0 bg-white">
           <h3 className="font-semibold text-sm">Merged preview ({rows.length} rows)</h3>
-          <button className="px-2 py-1 border rounded text-xs" onClick={onClose}>Esc to close</button>
+          <button className="px-2 py-1 border rounded text-xs" onClick={onClose}>Close</button>
         </div>
         <div className="p-3">
           <div className="overflow-auto border rounded">
@@ -603,6 +573,40 @@ function PreviewModal({onClose, headers, rows}){
             </table>
           </div>
           {rows.length>1000 && <div className="text-xs text-gray-500 mt-2">Showing first 1000 rows.</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+function HelpModal({onClose}){
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl max-w-3xl w-[90vw] max-h-[85vh] overflow-auto" onClick={(e)=>e.stopPropagation()}>
+        <div className="sticky top-0 bg-white border-b px-4 py-2 flex items-center justify-between">
+          <h2 className="font-semibold text-sm">How to use</h2>
+          <button className="px-2 py-1 border rounded text-xs" onClick={onClose}>Close</button>
+        </div>
+        <div className="p-4 text-sm space-y-4">
+          <ol className="list-decimal ml-5 space-y-2">
+            <li><b>Upload files</b> — File A = Main/Left, File B = Other/Right. Supports .xlsx/.csv. Optional Worksheet name.</li>
+            <li><b>Key column</b> — Leave blank to use the first column of File A, or type a unique ID (e.g., ID/SKU).</li>
+            <li><b>Compare</b> — Click <b>Compare</b>. Use chips to filter: Only modified/added/removed, Hide equal, Trim, Case-insensitive.</li>
+            <li><b>Review grid</b> — Modified cells are highlighted. Click a cell; press <b>Enter/Space</b> to toggle Left/Right; press <b>E</b> for Custom.</li>
+            <li><b>Row & column rules</b> — Row actions (Add/Keep/All B). Column menu (⋮): Prefer Right/Left, Prefer larger/smaller, If Right blank keep Left, Normalize.</li>
+            <li><b>Details panel</b> — Shows only differing cells for the selected row. Pick Left/Right or type Custom. Presets: Prefer Left/Right.</li>
+            <li><b>Keyboard</b> — <b>F</b>=Only modified, <b>/</b>=Search, <b>U</b>/<b>Shift+U</b>=Undo/Redo, <b>P</b>=Preview, <b>Esc</b>=close preview.</li>
+            <li><b>Export</b> — Preview merged → Export XLSX/CSV. Export Diff CSV for an audit log.</li>
+          </ol>
+          <div>
+            <h3 className="font-semibold text-sm mb-2">Examples</h3>
+            <ul className="list-disc ml-5 space-y-1">
+              <li><b>Sanity test:</b> Use the sample Left/Right files; Key=ID → expect ~5 Modified. Toggle Only modified.</li>
+              <li><b>Whitespace:</b> Enable Trim spaces to treat trailing spaces as equal.</li>
+              <li><b>Case:</b> Enable Case-insensitive to ignore case differences.</li>
+              <li><b>Prefer Right for Price:</b> Column (⋮) → Prefer Right. For Quantity use “prefer larger”.</li>
+            </ul>
+          </div>
+          <p className="text-xs text-gray-500">Tip: If you see too many Added/Removed, the Key is likely wrong.</p>
         </div>
       </div>
     </div>
