@@ -6,7 +6,7 @@
 <title>Excel/CSV Compare & Merge — 3-Pane UI</title>
 <link rel="icon" href="data:,">
 
-<!-- Tailwind CDN (fine for demo; consider CLI for production) -->
+<!-- Tailwind CDN (OK for demo; use CLI for production) -->
 <script src="https://cdn.tailwindcss.com"></script>
 
 <!-- React 18 UMD (production builds) -->
@@ -16,7 +16,7 @@
 <!-- SheetJS for Excel/CSV parse + write -->
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
-<!-- Babel Standalone to run JSX in the browser (no build step) -->
+<!-- Babel Standalone (must be BEFORE the text/babel app script) -->
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
 <style>
@@ -93,20 +93,7 @@ function computeDiff({Arows,Brows,headers,key}) {
     }
   });
   keysA.forEach(k=>{ if(!setB.has(k)) removed.push(k); });
-  const cells=[];
-  const allKeys=[...new Set([...keysA,...keysB])];
-  allKeys.forEach(rowKey=>{
-    const a = mapA.get(rowKey) || {};
-    const b = mapB.get(rowKey) || {};
-    headers.forEach(col=>{
-      if(col===key) return;
-      const hasA = a[col]!=null && a[col]!=='';
-      const hasB = b[col]!=null && b[col]!=='';
-      const equal = esc(a[col])===esc(b[col]);
-      cells.push({ rowKey, column: col, left: a[col]??'', right: b[col]??'', equal, missingLeft: !hasA, missingRight: !hasB });
-    });
-  });
-  return { mapA, mapB, added, removed, modified, unchanged, cells };
+  return { mapA, mapB, added, removed, modified, unchanged };
 }
 
 /* csv */
@@ -413,7 +400,7 @@ function App(){
     </div>
   );
 
-  /* hoisted small helpers inside App scope */
+  /* hoisted helpers inside App */
   function addColumnRule(col,rule){ applyUI(d=> ({...d, columnRules:[...d.columnRules.filter(r=>r.column!==col), {column:col, rule}]})); }
   function clearColumnRule(col){ applyUI(d=> ({...d, columnRules:d.columnRules.filter(r=>r.column!==col)})); }
   function selectCell(rowKey,col){ applyUI(d=> ({...d, selection:{rowKey, column:col}})); }
